@@ -1,0 +1,2731 @@
+<script type="text/javascript">
+(function() {
+    'use strict';
+
+    const PLUGIN_ID = 'folders';
+    const SIDEBAR_ID = 'folders-sidebar';
+    const STYLE_ID = 'folders-style-1-0';
+    const GLOBAL_CONFIG_TYPE = 'global-config';
+    const GLOBAL_ENV_NAME = 'folders';
+    const VERSION = '1.0.12';
+    const LOCAL_STATE_KEY = 'node-red-contrib-folders.uiState';
+    const DEFAULT_FLOW_ICON = 'red-ui-icons red-ui-icons-flow';
+    const DEFAULT_FOLDER_ICON = 'fa fa-folder';
+
+    let root;
+    let outline;
+    let tree;
+    let searchInput;
+    let filterSelect;
+    let sortDirButton;
+    let selected = null;
+    let selectedKeys = new Set();
+    let activeFlowId = null;
+    let editingFolderPath = null;
+    let editingFolderOriginal = null;
+    let editingItemKey = null;
+    let sortDir = 'asc';
+    let sortMode = 'name';
+    let filterMode = 'all';
+    const collapsed = new Set();
+    let dragState = null;
+    let footerDeleteButton;
+    let headerFilterButton;
+    let headerSortButton;
+    let headerSortDirButton;
+    let footerFolderStyleButton;
+    let visibleOrder = [];
+    let lastRangeAnchor = null;
+    let folderConfig = { version: 1, folders: {}, flows: {}, subflowFolders: {}, subflows: {}, updatedAt: '' };
+    let configLoaded = false;
+    let configSaveTimer = null;
+
+    function esc(value) {
+        return $('<div>').text(value === undefined || value === null ? '' : String(value)).html();
+    }
+
+    function notify(message, type) {
+        try {
+            if (RED && RED.notify) {
+                RED.notify(message, { type: type || 'success', timeout: 2500 });
+                return;
+            }
+        } catch (err) {}
+        console.log('[folders]', message);
+    }
+
+    function loadLocalState() {
+        try {
+            const state = JSON.parse(localStorage.getItem(LOCAL_STATE_KEY) || '{}');
+            if (state.sortMode) { sortMode = state.sortMode; }
+            if (state.sortDir === 'asc' || state.sortDir === 'desc') { sortDir = state.sortDir; }
+            if (state.filterMode) { filterMode = state.filterMode; }
+            collapsed.clear();
+            (Array.isArray(state.collapsed) ? state.collapsed : []).forEach(function(key) {
+                if (key) { collapsed.add(String(key)); }
+            });
+        } catch (err) {}
+    }
+
+    function saveLocalState() {
+        try {
+            localStorage.setItem(LOCAL_STATE_KEY, JSON.stringify({
+                sortMode: sortMode,
+                sortDir: sortDir,
+                filterMode: filterMode,
+                collapsed: Array.from(collapsed)
+            }));
+        } catch (err) {}
+    }
+
+    function installStyles() {
+        if (document.getElementById(STYLE_ID)) { return; }
+        if (!document.getElementById('folders-fontawesome-6')) {
+            const fa = document.createElement('link');
+            fa.id = 'folders-fontawesome-6';
+            fa.rel = 'stylesheet';
+            fa.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/all.min.css';
+            document.head.appendChild(fa);
+            const shim = document.createElement('link');
+            shim.id = 'folders-fontawesome-6-shims';
+            shim.rel = 'stylesheet';
+            shim.href = 'https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.5.2/css/v4-shims.min.css';
+            document.head.appendChild(shim);
+        }
+        const style = document.createElement('link');
+        style.id = STYLE_ID;
+        style.rel = 'stylesheet';
+        style.href = './resources/node-red-contrib-folders/folders.css';
+        document.head.appendChild(style);
+    }
+
+    function normalisePath(raw) {
+        if (raw === undefined || raw === null) { return ''; }
+        return String(raw).trim().replace(/\\+/g, '/').replace(/\/+/g, '/').replace(/^\/+/, '').replace(/\/+$/, '').split('/').map(part => part.trim()).filter(part => part && part !== '.' && part !== '..').join('/');
+    }
+
+    function ensureEnv(node) {
+        if (!node || typeof node !== 'object') { return []; }
+        if (!Array.isArray(node.env)) { node.env = []; }
+        return node.env;
+    }
+
+    function getEnv(node, name) {
+        const env = Array.isArray(node && node.env) ? node.env : [];
+        const item = env.find(function(entry) { return entry && entry.name === name; });
+        return item ? item.value : '';
+    }
+
+    function nowIso() { return new Date().toISOString(); }
+
+    function cleanFolderList(value) {
+        if (!Array.isArray(value)) { return []; }
+        return Array.from(new Set(value.map(normalisePath).filter(Boolean))).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function makeIdSafe() {
+        try { if (RED.nodes && typeof RED.nodes.id === 'function') { return RED.nodes.id(); } } catch (err) {}
+        return (Math.random().toString(16).slice(2) + Date.now().toString(16)).slice(0, 16);
+    }
+
+    function storedPath(path) {
+        const clean = normalisePath(path);
+        return clean ? '/' + clean : '/';
+    }
+
+    function eachGlobalConfigCandidate(callback) {
+        try { if (RED.nodes && typeof RED.nodes.eachConfig === 'function') { RED.nodes.eachConfig(function(node) { if (node && node.type === GLOBAL_CONFIG_TYPE) { callback(node); } }); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.eachNode === 'function') { RED.nodes.eachNode(function(node) { if (node && node.type === GLOBAL_CONFIG_TYPE) { callback(node); } }); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.filterNodes === 'function') { (RED.nodes.filterNodes({ type: GLOBAL_CONFIG_TYPE }) || []).forEach(callback); } } catch (err) {}
+    }
+
+    function collectGlobalConfigNodes() {
+        const nodes = [];
+        const seen = new Set();
+        eachGlobalConfigCandidate(function(node) {
+            if (!node || node.type !== GLOBAL_CONFIG_TYPE || seen.has(node)) { return; }
+            seen.add(node);
+            ensureEnv(node);
+            if (!node.modules || typeof node.modules !== 'object') { node.modules = {}; }
+            nodes.push(node);
+        });
+        return nodes;
+    }
+
+    function getGlobalEnvPayload(node) {
+        const raw = String(getEnv(node, GLOBAL_ENV_NAME) || '').trim();
+        if (!raw) { return null; }
+        try { return JSON.parse(raw); }
+        catch (err) {
+            console.warn('[folders] Invalid global environment variable "folders". Using empty config.', err);
+            return null;
+        }
+    }
+
+    function findGlobalConfigNode() {
+        const nodes = collectGlobalConfigNodes();
+        return nodes.find(function(node) { return !!getEnv(node, GLOBAL_ENV_NAME); }) || nodes[0] || null;
+    }
+
+    function attachGlobalConfigNode(node) {
+        let added = false;
+        try { if (RED.nodes && typeof RED.nodes.add === 'function') { RED.nodes.add(node); added = true; } } catch (err) { console.warn('[folders] RED.nodes.add(global-config) failed', err); }
+        try { if (RED.nodes && typeof RED.nodes.addConfig === 'function') { RED.nodes.addConfig(node); added = true; } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.registerConfigNode === 'function') { RED.nodes.registerConfigNode(node); added = true; } } catch (err) {}
+        try { if (RED.events && typeof RED.events.emit === 'function') { RED.events.emit('nodes:add', node); RED.events.emit('nodes:change', node); RED.events.emit('flows:change', node); } } catch (err) {}
+        markDirty(node);
+        return added;
+    }
+
+    function getOrCreateGlobalConfigNode() {
+        let node = findGlobalConfigNode();
+        if (!node) {
+            node = {
+                id: makeIdSafe(),
+                type: GLOBAL_CONFIG_TYPE,
+                env: [],
+                modules: {}
+            };
+            attachGlobalConfigNode(node);
+        }
+        ensureEnv(node);
+        if (!node.modules || typeof node.modules !== 'object') { node.modules = {}; }
+        return node;
+    }
+
+    function readGlobalFoldersConfig() {
+        const nodes = collectGlobalConfigNodes();
+        for (let i = 0; i < nodes.length; i++) {
+            const parsed = getGlobalEnvPayload(nodes[i]);
+            if (parsed) { return parsed; }
+        }
+        return { version: 1, folders: {}, flows: {}, subflowFolders: {}, subflows: {}, updatedAt: '' };
+    }
+
+    function setGlobalEnvPayload(node, payload) {
+        if (!node) { return; }
+        ensureEnv(node);
+        let item = node.env.find(function(entry) { return entry && entry.name === GLOBAL_ENV_NAME; });
+        if (!item) {
+            item = { name: GLOBAL_ENV_NAME, value: '', type: 'json' };
+            node.env.push(item);
+        }
+        item.name = GLOBAL_ENV_NAME;
+        item.type = 'json';
+        item.value = JSON.stringify(payload);
+        if (!node.modules || typeof node.modules !== 'object') { node.modules = {}; }
+        try { node.changed = true; } catch (err) {}
+    }
+
+    function writeGlobalFoldersConfig(value) {
+        const clean = normaliseConfig(value);
+        const payload = {
+            version: 1,
+            updatedAt: nowIso(),
+            folders: {},
+            flows: {},
+            subflowFolders: {},
+            subflows: {}
+        };
+        Object.keys(clean.folders).sort().forEach(function(path) {
+            const input = clean.folders[path];
+            payload.folders[storedPath(path)] = {
+                path: storedPath(path),
+                name: input.name || path.split('/').pop(),
+                parent: input.parent || storedPath(path.split('/').slice(0, -1).join('/')),
+                icon: input.icon || DEFAULT_FOLDER_ICON,
+                color: input.color || '',
+                createdAt: input.createdAt || nowIso(),
+                updatedAt: input.updatedAt || nowIso(),
+                folders: input.folders || [],
+                files: input.files || []
+            };
+        });
+        Object.keys(clean.flows).sort().forEach(function(id) {
+            const input = clean.flows[id];
+            payload.flows[id] = {
+                id: id,
+                name: input.name || '',
+                path: storedPath(input.path),
+                icon: input.icon || '',
+                color: input.color || '',
+                createdAt: input.createdAt || input.updatedAt || nowIso(),
+                updatedAt: input.updatedAt || nowIso()
+            };
+        });
+        Object.keys(clean.subflowFolders).sort().forEach(function(path) {
+            const input = clean.subflowFolders[path];
+            payload.subflowFolders[storedPath(path)] = {
+                path: storedPath(path),
+                name: input.name || path.split('/').pop(),
+                parent: input.parent || storedPath(path.split('/').slice(0, -1).join('/')),
+                icon: input.icon || DEFAULT_FOLDER_ICON,
+                color: input.color || '',
+                createdAt: input.createdAt || nowIso(),
+                updatedAt: input.updatedAt || nowIso(),
+                folders: input.folders || [],
+                files: input.files || []
+            };
+        });
+        Object.keys(clean.subflows).sort().forEach(function(id) {
+            const input = clean.subflows[id];
+            payload.subflows[id] = {
+                id: id,
+                name: input.name || '',
+                path: storedPath(input.path),
+                icon: input.icon || '',
+                color: input.color || '',
+                createdAt: input.createdAt || input.updatedAt || nowIso(),
+                updatedAt: input.updatedAt || nowIso()
+            };
+        });
+        const primary = getOrCreateGlobalConfigNode();
+        setGlobalEnvPayload(primary, payload);
+        markDirty(primary);
+        try { if (RED.events && typeof RED.events.emit === 'function') { RED.events.emit('nodes:change', primary); RED.events.emit('flows:change', primary); } } catch (err) {}
+        return payload;
+    }
+
+    function readMeta(flow) {
+        return { path: getPath(flow) };
+    }
+
+    function writeMeta(flow, patch) {
+        if (!flow || !flow.id) { return; }
+        folderConfig = normaliseConfig(folderConfig);
+        const path = normalisePath((patch && Object.prototype.hasOwnProperty.call(patch, 'path')) ? patch.path : getPath(flow));
+        folderConfig.flows[flow.id] = Object.assign({}, folderConfig.flows[flow.id] || {}, {
+            id: flow.id,
+            name: getLabel(flow),
+            path: storedPath(path),
+            icon: folderConfig.flows[flow.id] && folderConfig.flows[flow.id].icon ? folderConfig.flows[flow.id].icon : '',
+            color: folderConfig.flows[flow.id] && folderConfig.flows[flow.id].color ? folderConfig.flows[flow.id].color : '',
+            createdAt: folderConfig.flows[flow.id] && folderConfig.flows[flow.id].createdAt ? folderConfig.flows[flow.id].createdAt : nowIso(),
+            updatedAt: nowIso()
+        });
+        ensureFolderRecord(path);
+        scheduleConfigSave();
+    }
+
+    function getPath(flow) {
+        if (!flow || !flow.id) { return ''; }
+        folderConfig = normaliseConfig(folderConfig);
+        const entry = folderConfig.flows && folderConfig.flows[flow.id];
+        if (entry && entry.path !== undefined && entry.path !== null) { return normalisePath(entry.path); }
+        return '';
+    }
+
+    function flowReferences(id) {
+        const refs = [];
+        const seen = new Set();
+        function add(ref) {
+            if (!ref || typeof ref !== 'object' || !ref.id || ref.id !== id || seen.has(ref)) { return; }
+            seen.add(ref);
+            refs.push(ref);
+        }
+        add(findWorkspaceById(id));
+        try { if (RED.nodes && typeof RED.nodes.node === 'function') { add(RED.nodes.node(id)); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.getNode === 'function') { add(RED.nodes.getNode(id)); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.eachNode === 'function') { RED.nodes.eachNode(function(node) { if (node && node.id === id) { add(node); } }); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.eachWorkspace === 'function') { RED.nodes.eachWorkspace(function(workspace) { if (workspace && workspace.id === id) { add(workspace); } }); } } catch (err) {}
+        try { if (RED.nodes && RED.nodes.workspaces) { if (Array.isArray(RED.nodes.workspaces)) { RED.nodes.workspaces.forEach(add); } else { add(RED.nodes.workspaces[id]); } } } catch (err) {}
+        return refs;
+    }
+
+    function writeMetaEverywhere(flowOrId, patch) {
+        const id = typeof flowOrId === 'string' ? flowOrId : flowOrId && flowOrId.id;
+        if (!id) { return null; }
+        const refs = flowReferences(id);
+        const first = refs[0] || (typeof flowOrId === 'object' ? flowOrId : findWorkspaceById(id));
+        if (first) { writeMeta(first, patch); }
+        refs.forEach(function(ref) { try { ref.changed = true; } catch (err) {} });
+        return first;
+    }
+
+    function getLabel(flow) { return (flow && (flow.label || flow.name || flow.id)) || 'Unnamed flow'; }
+
+    function getInfo(flow) { return String((flow && (flow.info || flow.description)) || ''); }
+
+    function findWorkspaceById(id) {
+        if (!id || !RED || !RED.nodes) { return null; }
+        const methods = ['workspace', 'getWorkspace', 'getWorkspaceById', 'node', 'getNode'];
+        for (const method of methods) {
+            try {
+                if (typeof RED.nodes[method] === 'function') {
+                    const found = RED.nodes[method](id);
+                    if (found) { return found; }
+                }
+            } catch (err) {}
+        }
+        try {
+            if (RED.nodes.workspaces) {
+                if (Array.isArray(RED.nodes.workspaces)) { return RED.nodes.workspaces.find(workspace => workspace && workspace.id === id) || null; }
+                return RED.nodes.workspaces[id] || null;
+            }
+        } catch (err) {}
+        return null;
+    }
+
+    function getWorkspaces() {
+        const result = [];
+        const seen = new Set();
+        function add(item) {
+            try {
+                let workspace = item;
+                if (typeof item === 'string') { workspace = findWorkspaceById(item); }
+                if (!workspace || !workspace.id || seen.has(workspace.id)) { return; }
+                if (workspace.type && workspace.type !== 'tab') { return; }
+                seen.add(workspace.id);
+                result.push(workspace);
+            } catch (err) {}
+        }
+        try { if (RED.nodes && typeof RED.nodes.eachWorkspace === 'function') { RED.nodes.eachWorkspace(add); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.getWorkspaceOrder === 'function') { (RED.nodes.getWorkspaceOrder() || []).forEach(add); } } catch (err) {}
+        try { if (RED.nodes && RED.nodes.workspaces) { if (Array.isArray(RED.nodes.workspaces)) { RED.nodes.workspaces.forEach(add); } else { Object.keys(RED.nodes.workspaces).forEach(id => add(RED.nodes.workspaces[id] || id)); } } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.eachNode === 'function') { RED.nodes.eachNode(function(node) { if (node && node.type === 'tab') { add(node); } }); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.filterNodes === 'function') { (RED.nodes.filterNodes({ type: 'tab' }) || []).forEach(add); } } catch (err) {}
+        return result.sort(compareFlows);
+    }
+
+    function findSubflowById(id) {
+        if (!id || !RED || !RED.nodes) { return null; }
+        try { if (RED.nodes.subflow && typeof RED.nodes.subflow === 'function') { const sf = RED.nodes.subflow(id); if (sf) { return sf; } } } catch (err) {}
+        try { if (RED.nodes.node && typeof RED.nodes.node === 'function') { const sf = RED.nodes.node(id); if (sf && sf.type === 'subflow') { return sf; } } } catch (err) {}
+        try { if (RED.nodes.getNode && typeof RED.nodes.getNode === 'function') { const sf = RED.nodes.getNode(id); if (sf && sf.type === 'subflow') { return sf; } } } catch (err) {}
+        return null;
+    }
+
+    function getSubflows(applySearch) {
+        const result = [];
+        const seen = new Set();
+        function add(item) {
+            try {
+                if (!item || !item.id || seen.has(item.id)) { return; }
+                if (item.type && item.type !== 'subflow') { return; }
+                seen.add(item.id);
+                result.push(item);
+            } catch (err) {}
+        }
+        try { if (RED.nodes && typeof RED.nodes.eachSubflow === 'function') { RED.nodes.eachSubflow(add); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.eachNode === 'function') { RED.nodes.eachNode(function(node) { if (node && node.type === 'subflow') { add(node); } }); } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.filterNodes === 'function') { (RED.nodes.filterNodes({ type: 'subflow' }) || []).forEach(add); } } catch (err) {}
+        try {
+            if (RED.nodes && RED.nodes.subflows) {
+                if (Array.isArray(RED.nodes.subflows)) { RED.nodes.subflows.forEach(add); }
+                else { Object.keys(RED.nodes.subflows).forEach(id => add(RED.nodes.subflows[id] || findSubflowById(id))); }
+            }
+        } catch (err) {}
+        if (applySearch === false) { return result.sort(compareFlows); }
+        const q = String(searchInput ? searchInput.val() : '').trim().toLowerCase();
+        return result.filter(sf => {
+            const text = `${getLabel(sf)} ${sf.id || ''} ${getInfo(sf)}`.toLowerCase();
+            return !q || text.indexOf(q) !== -1;
+        }).sort(compareFlows);
+    }
+
+    function updateInfoPanel() {
+        try {
+            if (!selected || !RED.sidebar || !RED.sidebar.info || typeof RED.sidebar.info.refresh !== 'function') {
+                return;
+            }
+
+            function injectInfoRows(rows) {
+                function tryInject(attempt) {
+                    try {
+                        const panel = $('.red-ui-sidebar-info').first();
+                        if (!panel.length) {
+                            if (attempt < 5) {
+                                setTimeout(function () { tryInject(attempt + 1); }, 50);
+                            }
+                            return;
+                        }
+
+                        let table = panel.find('table.red-ui-info-table').first();
+
+                        if (!table.length) {
+                            const scrollArea = panel.find('div').filter(function () {
+                                const overflowY = String($(this).css('overflow-y') || '');
+                                return overflowY === 'auto' || overflowY === 'scroll';
+                            }).first();
+
+                            table = $('<table class="red-ui-info-table"><tbody></tbody></table>');
+
+                            if (scrollArea.length) {
+                                scrollArea.prepend(table);
+                            } else {
+                                panel.append(table);
+                            }
+                        }
+
+                        let tbody = table.find('tbody').first();
+                        if (!tbody.length) {
+                            tbody = $('<tbody></tbody>').appendTo(table);
+                        }
+
+                        tbody.find('tr.folders-info-extra-row').remove();
+
+                        const flowRow = tbody.find('tr.red-ui-help-info-row').filter(function () {
+                            return $.trim($(this).children('td').first().text()) === 'Flow';
+                        }).first();
+
+                        let anchor = flowRow.length ? flowRow : tbody.find('tr.red-ui-help-info-row').first();
+                        rows.slice().reverse().forEach(function(rowData) {
+                            const copyButton = rowData.copy ? '<button class="red-ui-button red-ui-button-small" type="button" title="Copy"><i class="fa fa-clipboard"></i></button>' : '';
+                            const row = $(
+                                '<tr class="red-ui-help-info-row folders-info-extra-row">' +
+                                    '<td>' + esc(rowData.label) + '</td>' +
+                                    '<td>' +
+                                        '<span class="red-ui-debug-msg-element red-ui-debug-msg-top-level">' +
+                                            '<span class="red-ui-debug-msg-row">' +
+                                                (copyButton ? '<span class="red-ui-debug-msg-tools"><span class="red-ui-debug-msg-tools-copy button-group">' + copyButton + '</span></span>' : '') +
+                                                '<span class="red-ui-debug-msg-object-value">' + rowData.html + '</span>' +
+                                            '</span>' +
+                                        '</span>' +
+                                    '</td>' +
+                                '</tr>'
+                            );
+                            if (rowData.copy) {
+                                row.find('button').on('click', function (e) {
+                                    e.preventDefault();
+                                    e.stopPropagation();
+                                    try {
+                                        if (navigator.clipboard && navigator.clipboard.writeText) {
+                                            navigator.clipboard.writeText(rowData.copy);
+                                        }
+                                    } catch (err) {}
+                                });
+                            }
+                            if (anchor.length) { row.insertAfter(anchor); }
+                            else { tbody.prepend(row); }
+                        });
+                    } catch (err) {
+                        if (attempt < 5) {
+                            setTimeout(function () { tryInject(attempt + 1); }, 50);
+                        }
+                    }
+                }
+
+                tryInject(0);
+            }
+
+            function stringValue(value) {
+                return '<span class="red-ui-debug-msg-type-string red-ui-debug-msg-object-header">"' + esc(value || '') + '"</span>';
+            }
+            function numberValue(value) {
+                return '<span class="red-ui-debug-msg-type-number">' + esc(value) + '</span>';
+            }
+            function iconValue(icon, color) {
+                return stringValue(icon || '');
+            }
+            function colorValue(color) {
+                return stringValue(color || '');
+            }
+            function applyInfoPanelStyle(icon, color, title, isSubflow) {
+                setTimeout(function() {
+                    try {
+                        const panel = $('.red-ui-sidebar-info').first();
+                        const header = panel.find('.red-ui-sidebar-header').first();
+                        if (header.length) {
+                            const label = header.children('span').filter(function() {
+                                return !$(this).hasClass('button-group') && !$(this).find('.red-ui-node-icon-container').length;
+                            }).first();
+                            if (label.length && title) { label.text(title); }
+
+                            const holder = header.find('.red-ui-node-icon-container').first();
+                            if (holder.length && icon) {
+                                holder.empty();
+                                const nodeIcon = $('<div>', { class: 'red-ui-node-icon red-ui-palette-icon-flow' }).appendTo(holder);
+                                const iconEl = $('<i>', { class: 'red-ui-palette-icon ' + icon }).appendTo(nodeIcon);
+                                nodeIcon.css({ backgroundColor: '', borderColor: '' });
+                                if (color) {
+                                    if (String(icon || '').indexOf('red-ui-icons') !== -1) {
+                                        iconEl.css({ color: '', backgroundColor: color });
+                                    } else {
+                                        iconEl.css({ color: color, backgroundColor: '' });
+                                    }
+                                }
+                                if (isSubflow) { $('<span>', { class: 'folders-subflow-badge', title: 'Subflow' }).text('S').appendTo(holder.css('position', 'relative')); }
+                            }
+                        }
+
+                        const titleIcons = panel.find('.red-ui-info-header i,.red-ui-sidebar-info-header i,.red-ui-info-title i,.red-ui-help-info-header i,.red-ui-info-header .red-ui-icons,.red-ui-sidebar-info-header .red-ui-icons');
+                        const globalIcons = $('.red-ui-sidebar-info-header i,.red-ui-info-header i,.red-ui-help-info-header i').filter(':visible');
+                        titleIcons.add(globalIcons).each(function() {
+                            const titleIcon = $(this);
+                            if (icon) {
+                                titleIcon.attr('class', icon);
+                                if (String(icon || '').indexOf('red-ui-icons') !== -1) {
+                                    titleIcon.css({ color: '', backgroundColor: color || '' });
+                                } else {
+                                    titleIcon.css({ color: color || '', backgroundColor: '' });
+                                }
+                            }
+                        });
+                    } catch (err) {}
+                }, 20);
+            }
+            function folderTotal(kind, path) {
+                const clean = normalisePath(path);
+                if (kind === 'all') { return folderTotal('flow', path) + folderTotal('subflow', path); }
+                const items = kind === 'subflow' ? getSubflows(false) : getWorkspaces();
+                return items.filter(function(item) {
+                    const p = getItemPath(kind, item);
+                    return p === clean || p.indexOf(clean + '/') === 0;
+                }).length;
+            }
+
+            if (selected.type === 'folder') {
+                const path = normalisePath(selected.path);
+                const label = path.split('/').pop() || 'Folder';
+                const meta = getFolderMetaForKind('flow', path);
+                const record = folderStore('flow')[path] || {};
+                RED.sidebar.info.refresh({
+                    id: 'folders-folder:' + path,
+                    type: 'folders-folder',
+                    label: label,
+                    name: label,
+                    icon: meta.icon || DEFAULT_FOLDER_ICON,
+                    color: meta.color || '',
+                    info: ''
+                });
+                injectInfoRows([
+                    { label: 'Directory', html: stringValue(storedPath(path)), copy: storedPath(path) },
+                    { label: 'Created', html: stringValue(record.createdAt || '') },
+                    { label: 'Updated', html: stringValue(record.updatedAt || '') },
+                    { label: 'Items', html: numberValue(folderTotal('all', path)) },
+                    { label: 'Icon', html: iconValue(meta.icon || DEFAULT_FOLDER_ICON, meta.color || '') },
+                    { label: 'Colour', html: colorValue(meta.color || '') }
+                ]);
+                applyInfoPanelStyle(meta.icon || DEFAULT_FOLDER_ICON, meta.color || '', label, false);
+            } else if (selected.type === 'subflow-folder') {
+                const path = normalisePath(selected.path);
+                const label = path.split('/').pop() || 'Folder';
+                const meta = getFolderMetaForKind('subflow', path);
+                const record = folderStore('subflow')[path] || {};
+                RED.sidebar.info.refresh({
+                    id: 'folders-subflow-folder:' + path,
+                    type: 'folders-subflow-folder',
+                    label: label,
+                    name: label,
+                    icon: meta.icon || DEFAULT_FOLDER_ICON,
+                    color: meta.color || '',
+                    info: ''
+                });
+                injectInfoRows([
+                    { label: 'Directory', html: stringValue(storedPath(path)), copy: storedPath(path) },
+                    { label: 'Created', html: stringValue(record.createdAt || '') },
+                    { label: 'Updated', html: stringValue(record.updatedAt || '') },
+                    { label: 'Subflows', html: numberValue(folderTotal('subflow', path)) },
+                    { label: 'Icon', html: iconValue(meta.icon || DEFAULT_FOLDER_ICON, meta.color || '') },
+                    { label: 'Colour', html: colorValue(meta.color || '') }
+                ]);
+                applyInfoPanelStyle(meta.icon || DEFAULT_FOLDER_ICON, meta.color || '', label, false);
+            } else if (selected.type === 'flow') {
+                const flow = findWorkspaceById(selected.id);
+                if (flow) {
+                    const meta = getItemMeta('flow', flow);
+                    const record = itemStore('flow')[flow.id] || {};
+                    RED.sidebar.info.refresh(flow);
+                    injectInfoRows([
+                        { label: 'Directory', html: stringValue(storedPath(getPath(flow))), copy: storedPath(getPath(flow)) },
+                        { label: 'Created', html: stringValue(record.createdAt || '') },
+                        { label: 'Updated', html: stringValue(record.updatedAt || '') },
+                        { label: 'Icon', html: iconValue(meta.icon || DEFAULT_FLOW_ICON, meta.color || '') },
+                        { label: 'Colour', html: colorValue(meta.color || '') }
+                    ]);
+                    applyInfoPanelStyle(meta.icon || DEFAULT_FLOW_ICON, meta.color || '', getLabel(flow), false);
+                }
+            } else if (selected.type === 'subflow') {
+                const subflow = findSubflowById(selected.id);
+                if (subflow) {
+                    const meta = getItemMeta('subflow', subflow);
+                    const record = itemStore('subflow')[subflow.id] || {};
+                    RED.sidebar.info.refresh(subflow);
+                    injectInfoRows([
+                        { label: 'Directory', html: stringValue(storedPath(getItemPath('subflow', subflow))), copy: storedPath(getItemPath('subflow', subflow)) },
+                        { label: 'Created', html: stringValue(record.createdAt || '') },
+                        { label: 'Updated', html: stringValue(record.updatedAt || '') },
+                        { label: 'Icon', html: iconValue(meta.icon || DEFAULT_FLOW_ICON, meta.color || '') },
+                        { label: 'Colour', html: colorValue(meta.color || '') }
+                    ]);
+                    applyInfoPanelStyle(meta.icon || DEFAULT_FLOW_ICON, meta.color || '', getLabel(subflow), true);
+                }
+            }
+        } catch (err) {}
+    }
+
+    function forceInfoPanelUpdate(times) {
+        // The info sidebar redraws asynchronously, so folder rows need a few nudges.
+        [0, 50, 150, 350, 700].slice(0, times || 5).forEach(function(delay) {
+            setTimeout(updateInfoPanel, delay);
+        });
+    }
+
+    function getCurrentWorkspaceId() {
+        try { if (RED.workspaces && typeof RED.workspaces.active === 'function') { return RED.workspaces.active(); } if (RED.workspaces && RED.workspaces.activeWorkspace) { return RED.workspaces.activeWorkspace; } } catch (err) {}
+        return null;
+    }
+
+    function showWorkspace(flowId) {
+        try { if (RED.workspaces && typeof RED.workspaces.show === 'function') { RED.workspaces.show(flowId); return true; } } catch (err) {}
+        try { if (RED.view && typeof RED.view.showWorkspace === 'function') { RED.view.showWorkspace(flowId); return true; } } catch (err) {}
+        try { if (RED.actions && typeof RED.actions.invoke === 'function') { RED.actions.invoke('core:show-flow', flowId); return true; } } catch (err) {}
+        try { const tab = $(`[data-workspace-id="${flowId}"], [data-id="${flowId}"]`).filter('.red-ui-workspace-tab,.red-ui-tabs-tab').first(); if (tab.length) { tab.trigger('click'); return true; } } catch (err) {}
+        return false;
+    }
+
+    function openWorkspaceEditFromTab(flowId) {
+        showWorkspace(flowId);
+        setTimeout(function() {
+            const targetHref = '#' + String(flowId || '');
+            const tabLabel = $('a.red-ui-tab-label').filter(function() {
+                return $(this).attr('href') === targetHref;
+            }).first();
+            if (!tabLabel.length) { return; }
+            // Native dispatch matches the browser event the Node-RED tab code listens for.
+            tabLabel[0].dispatchEvent(new MouseEvent('dblclick', {
+                bubbles: true,
+                cancelable: true,
+                view: window
+            }));
+        }, 80);
+    }
+
+    function markDirty(flow) {
+        try { if (RED.nodes && typeof RED.nodes.dirty === 'function') { RED.nodes.dirty(true); } } catch (err) {}
+        if (flow && flow.id && flow.type) {
+            try {
+                if (RED.events && typeof RED.events.emit === 'function') {
+                    RED.events.emit('flows:change', flow);
+                    RED.events.emit('workspace:change', flow);
+                }
+            } catch (err) {}
+        }
+        try { if (RED.view && typeof RED.view.redraw === 'function') { RED.view.redraw(true); } } catch (err) {}
+        try { if (RED.workspaces && typeof RED.workspaces.refresh === 'function') { RED.workspaces.refresh(); } } catch (err) {}
+    }
+
+    function boolProp(flow, names) {
+        for (const name of names) { if (flow && flow[name] !== undefined) { return !!flow[name]; } }
+        return false;
+    }
+
+    function setBoolProp(flow, names, value) {
+        if (!flow) { return; }
+        names.forEach(function(name) { flow[name] = !!value; });
+    }
+
+    function isHidden(flow) {
+        if (!flow) { return false; }
+        try { if (RED.workspaces && typeof RED.workspaces.isHidden === 'function') { return !!RED.workspaces.isHidden(flow.id); } } catch (err) {}
+        try {
+            const hiddenTabs = JSON.parse(RED.settings.getLocal('hiddenTabs') || '{}');
+            return !!hiddenTabs[flow.id];
+        } catch (err) {}
+        return boolProp(flow, ['hidden', 'hide']);
+    }
+
+    function isDisabled(flow) { return boolProp(flow, ['disabled', 'disable']); }
+
+    function isLocked(flow) { return boolProp(flow, ['locked', 'lock']); }
+
+    function refreshAfterStateChange(flow) {
+        try { if (RED.workspaces && typeof RED.workspaces.refresh === 'function') { RED.workspaces.refresh(); } } catch (err) {}
+        try { if (RED.sidebar && RED.sidebar.info && typeof RED.sidebar.info.refresh === 'function') { RED.sidebar.info.refresh(flow); } } catch (err) {}
+        setTimeout(render, 20);
+        setTimeout(render, 180);
+    }
+
+    function toggleFlowState(flow, kind) {
+        if (!flow) { return; }
+        if ((flow.type === 'subflow' || flow._foldersKind === 'subflow') && kind !== 'hidden') { return; }
+        try {
+            if (kind === 'hidden') {
+                if (isHidden(flow)) {
+                    if (RED.workspaces && typeof RED.workspaces.show === 'function') { RED.workspaces.show(flow.id, null, true); }
+                    else { setBoolProp(flow, ['hidden', 'hide'], false); markDirty(flow); }
+                } else {
+                    if (RED.workspaces && typeof RED.workspaces.hide === 'function') { RED.workspaces.hide(flow.id); }
+                    else { setBoolProp(flow, ['hidden', 'hide'], true); markDirty(flow); }
+                }
+                refreshAfterStateChange(flow);
+                return;
+            }
+            if (kind === 'disabled') {
+                if (RED.workspaces && typeof RED.workspaces.enable === 'function' && typeof RED.workspaces.disable === 'function') {
+                    isDisabled(flow) ? RED.workspaces.enable(flow.id) : RED.workspaces.disable(flow.id);
+                } else {
+                    setBoolProp(flow, ['disabled', 'disable'], !isDisabled(flow));
+                    markDirty(flow);
+                }
+                refreshAfterStateChange(flow);
+                return;
+            }
+            if (kind === 'locked') {
+                if (RED.workspaces && typeof RED.workspaces.lock === 'function' && typeof RED.workspaces.unlock === 'function') {
+                    isLocked(flow) ? RED.workspaces.unlock(flow.id) : RED.workspaces.lock(flow.id);
+                } else {
+                    setBoolProp(flow, ['locked', 'lock'], !isLocked(flow));
+                    markDirty(flow);
+                }
+                refreshAfterStateChange(flow);
+            }
+        } catch (err) {
+            console.warn('Folders state toggle failed', err);
+            notify('Could not update flow state.', 'error');
+        }
+    }
+
+    function syncSelectedToWorkspace() {
+        if (selectedKeys && selectedKeys.size > 1) { return; }
+        const activeId = getCurrentWorkspaceId();
+        if (activeId) {
+            const activeType = findSubflowById(activeId) ? 'subflow' : 'flow';
+            selected = { type: activeType, id: activeId };
+            selectedKeys = new Set([itemKey(activeType, activeId)]);
+        }
+    }
+
+    function toggleCollapse(key, content, childList) {
+        const willExpand = collapsed.has(key);
+        if (willExpand) {
+            collapsed.delete(key);
+            if (content && content.length) { content.addClass('expanded').children('.red-ui-treeList-label').addClass('expanded'); }
+            if (childList && childList.length) { childList.stop(true, true).slideDown(95); }
+        } else {
+            collapsed.add(key);
+            if (content && content.length) { content.removeClass('expanded').children('.red-ui-treeList-label').removeClass('expanded'); }
+            if (childList && childList.length) { childList.stop(true, true).slideUp(95); }
+        }
+        saveLocalState();
+    }
+
+    function iconHtml(iconClass) {
+        const cls = iconClass || DEFAULT_FLOW_ICON;
+        return `<i class="${esc(cls)}"></i>`;
+    }
+
+    function applyIconColor(icon, color) {
+        if (!icon || !icon.length || !color) { return; }
+        // Node-RED's default flow icon is mask-based, so it needs background-color.
+        if (icon.hasClass('red-ui-icons') || String(icon.attr('class') || '').indexOf('red-ui-icons-flow') !== -1) {
+            icon.css({ color: '', backgroundColor: color });
+            return;
+        }
+        icon.css({ color: color, backgroundColor: 'transparent' });
+    }
+
+    function itemKey(type, id) { return type + ':' + (id || ''); }
+
+    function setSelectedFromKey(key) {
+        if (!key) { selected = null; return; }
+        if (key.indexOf('flow:') === 0) { selected = { type: 'flow', id: key.slice(5) }; return; }
+        if (key.indexOf('subflow-folder:') === 0) { selected = { type: 'subflow-folder', path: key.slice(15) }; return; }
+        if (key.indexOf('subflow:') === 0) { selected = { type: 'subflow', id: key.slice(8) }; return; }
+        if (key.indexOf('folder:') === 0) { selected = { type: 'folder', path: key.slice(7) }; return; }
+        selected = null;
+    }
+
+    function selectItem(type, key, event) {
+        const ik = itemKey(type, key);
+        const ctrl = !!(event && (event.ctrlKey || event.metaKey));
+        const shift = !!(event && event.shiftKey);
+        const singleFolderSelected = type === 'folder' && !ctrl && !shift && selectedKeys.size === 1 && selectedKeys.has(ik);
+        if (singleFolderSelected) {
+            selectedKeys = new Set();
+            selected = null;
+            updateFooterButtons();
+            updateInfoPanel();
+            return;
+        }
+        if (shift && lastRangeAnchor && visibleOrder.indexOf(lastRangeAnchor) !== -1 && visibleOrder.indexOf(ik) !== -1) {
+            const a = visibleOrder.indexOf(lastRangeAnchor);
+            const b = visibleOrder.indexOf(ik);
+            const from = Math.min(a, b);
+            const to = Math.max(a, b);
+            if (!ctrl) { selectedKeys = new Set(); }
+            for (let i = from; i <= to; i++) { selectedKeys.add(visibleOrder[i]); }
+        } else if (ctrl) {
+            if (selectedKeys.has(ik)) { selectedKeys.delete(ik); }
+            else { selectedKeys.add(ik); }
+            lastRangeAnchor = ik;
+        } else {
+            selectedKeys = new Set([ik]);
+            lastRangeAnchor = ik;
+        }
+        const first = selectedKeys.values().next();
+        if (first.done) { selected = null; }
+        else { setSelectedFromKey(first.value); }
+        updateFooterButtons();
+        updateInfoPanel();
+    }
+
+    function isItemSelected(type, key) {
+        return selectedKeys.has(itemKey(type, key));
+    }
+
+    function selectedKeysForDrag(type, key) {
+        const ik = itemKey(type, key);
+        if (!selectedKeys.has(ik)) {
+            selectedKeys = new Set([ik]);
+            setSelectedFromKey(ik);
+            lastRangeAnchor = ik;
+        }
+        return Array.from(selectedKeys);
+    }
+
+    function bindDraggable(label, type, key) {
+        label.attr('draggable', true);
+        label.on('dragstart', function(e) {
+            const keys = selectedKeysForDrag(type, key);
+            dragState = { keys: keys };
+            try { e.originalEvent.dataTransfer.setData('text/plain', JSON.stringify(dragState)); e.originalEvent.dataTransfer.effectAllowed = 'move'; } catch (err) {}
+        });
+        label.on('dragend', function() { dragState = null; $('.folders-drop-over').removeClass('folders-drop-over'); });
+    }
+
+    function bindDropTarget(label, targetPath) {
+        label.on('dragover', function(e) {
+            if (!dragState) { return; }
+            e.preventDefault();
+            try { e.originalEvent.dataTransfer.dropEffect = 'move'; } catch (err) {}
+            label.addClass('folders-drop-over');
+        });
+        label.on('dragleave', function() { label.removeClass('folders-drop-over'); });
+        label.on('drop', function(e) {
+            if (!dragState) { return; }
+            e.preventDefault();
+            e.stopPropagation();
+            label.removeClass('folders-drop-over');
+            moveDragItemsTo(targetPath);
+        });
+    }
+
+    function flowPassesFilter(flow) {
+        const isSubflow = flow && (flow.type === 'subflow' || flow._foldersKind === 'subflow');
+        if (filterMode === 'flows') { return !isSubflow; }
+        if (filterMode === 'subflows') { return isSubflow; }
+        if (filterMode === 'hidden') { return isHidden(flow); }
+        if (filterMode === 'shown') { return !isHidden(flow); }
+        if (filterMode === 'disabled') { return isDisabled(flow); }
+        if (filterMode === 'enabled') { return !isDisabled(flow); }
+        if (filterMode === 'locked') { return isLocked(flow); }
+        if (filterMode === 'unlocked') { return !isLocked(flow); }
+        return true;
+    }
+
+    function countNodes(flow) {
+        let count = 0;
+        try { if (RED.nodes && typeof RED.nodes.eachNode === 'function') { RED.nodes.eachNode(function(node) { if (node && node.z === flow.id) { count++; } }); } } catch (err) {}
+        return count;
+    }
+
+    function countSubflowInstances(subflow) {
+        if (!subflow || !subflow.id) { return 0; }
+        let count = 0;
+        const typeName = 'subflow:' + subflow.id;
+        try { if (RED.nodes && typeof RED.nodes.eachNode === 'function') { RED.nodes.eachNode(function(node) { if (node && node.type === typeName) { count++; } }); } } catch (err) {}
+        return count;
+    }
+
+    function compareFlows(a, b) {
+        let result = 0;
+        if (sortMode === 'created' || sortMode === 'updated') {
+            const aStore = a && (a.type === 'subflow' || a._foldersKind === 'subflow') ? itemStore('subflow')[a.id] : itemStore('flow')[a && a.id];
+            const bStore = b && (b.type === 'subflow' || b._foldersKind === 'subflow') ? itemStore('subflow')[b.id] : itemStore('flow')[b && b.id];
+            const aValue = String((aStore && aStore[sortMode + 'At']) || '');
+            const bValue = String((bStore && bStore[sortMode + 'At']) || '');
+            result = aValue.localeCompare(bValue);
+        } else if (sortMode === 'type') {
+            const aType = a && (a.type === 'subflow' || a._foldersKind === 'subflow') ? 'subflow' : 'flow';
+            const bType = b && (b.type === 'subflow' || b._foldersKind === 'subflow') ? 'subflow' : 'flow';
+            result = aType.localeCompare(bType) || String(getLabel(a) || '').localeCompare(String(getLabel(b) || ''), undefined, { sensitivity: 'base' });
+        } else {
+            result = String(getLabel(a) || '').localeCompare(String(getLabel(b) || ''), undefined, { sensitivity: 'base' });
+        }
+        return sortDir === 'desc' ? -result : result;
+    }
+
+    function ensureFolder(rootNode, path) {
+        let cursor = rootNode;
+        const clean = normalisePath(path);
+        if (!clean) { return cursor; }
+        clean.split('/').forEach(part => {
+            const nextPath = cursor.path ? cursor.path + '/' + part : part;
+            if (!cursor.folders[part]) { cursor.folders[part] = { name: part, path: nextPath, folders: {}, flows: [] }; }
+            cursor = cursor.folders[part];
+        });
+        return cursor;
+    }
+
+    function buildModel(flows, search, subflows) {
+        const rootNode = { name: '', path: '', folders: {}, flows: [] };
+        const q = String(search || '').trim().toLowerCase();
+        if (filterMode === 'all' && !q) { loadEmptyFolders().forEach(path => ensureFolder(rootNode, path)); }
+        flows.forEach(flow => {
+            const path = getPath(flow);
+            const label = getLabel(flow);
+            const haystack = `${label} ${path} ${getInfo(flow)}`.toLowerCase();
+            if (q && haystack.indexOf(q) === -1) { return; }
+            if (!flowPassesFilter(flow)) { return; }
+            ensureFolder(rootNode, path).flows.push(flow);
+        });
+        (subflows || []).forEach(subflow => {
+            const path = getItemPath('subflow', subflow);
+            const label = getLabel(subflow);
+            const haystack = `${label} ${path} ${getInfo(subflow)}`.toLowerCase();
+            if (q && haystack.indexOf(q) === -1) { return; }
+            if (!flowPassesFilter(subflow)) { return; }
+            ensureFolder(rootNode, path).flows.push(Object.assign(subflow, { _foldersKind: 'subflow' }));
+        });
+        return rootNode;
+    }
+
+    function buildSubflowModel(subflows, search) {
+        const rootNode = { name: '', path: '', folders: {}, flows: [] };
+        const q = String(search || '').trim().toLowerCase();
+        if (!q) { loadEmptyFoldersForKind('subflow').forEach(path => ensureFolder(rootNode, path)); }
+        subflows.forEach(subflow => {
+            const path = getItemPath('subflow', subflow);
+            const label = getLabel(subflow);
+            const haystack = `${label} ${path} ${getInfo(subflow)}`.toLowerCase();
+            if (q && haystack.indexOf(q) === -1) { return; }
+            ensureFolder(rootNode, path).flows.push(subflow);
+        });
+        return rootNode;
+    }
+
+    function folderHasContent(folder) { return folder.flows.length > 0 || Object.keys(folder.folders).length > 0; }
+
+    function normaliseConfig(value) {
+        const clean = { version: 1, folders: {}, flows: {}, subflowFolders: {}, subflows: {}, updatedAt: value && value.updatedAt ? value.updatedAt : '' };
+        if (value && typeof value === 'object') {
+            const folders = value.folders && typeof value.folders === 'object' ? value.folders : {};
+            Object.keys(folders).forEach(function(key) {
+                const input = folders[key] || {};
+                const p = normalisePath(input.path || key);
+                if (!p) { return; }
+                const parts = p.split('/');
+                const parent = parts.slice(0, -1).join('/');
+                clean.folders[p] = {
+                    path: storedPath(p),
+                    name: input.name || parts[parts.length - 1],
+                    parent: storedPath(parent),
+                    createdAt: input.createdAt || nowIso(),
+                    updatedAt: input.updatedAt || nowIso(),
+                    color: input.color || '',
+                    icon: input.icon || DEFAULT_FOLDER_ICON,
+                    files: Array.isArray(input.files) ? input.files.filter(Boolean) : [],
+                    folders: Array.isArray(input.folders) ? input.folders.filter(Boolean) : []
+                };
+            });
+            const flowSource = value.flows && typeof value.flows === 'object' ? value.flows : (value.flowPaths && typeof value.flowPaths === 'object' ? value.flowPaths : {});
+            Object.keys(flowSource).forEach(function(id) {
+                const input = flowSource[id];
+                let path = '';
+                let name = '';
+                if (typeof input === 'string') { path = input; }
+                else if (input && typeof input === 'object') { path = input.path || input.dir || ''; name = input.name || ''; }
+                clean.flows[id] = {
+                    id: id,
+                    name: name,
+                    path: storedPath(path),
+                    icon: input && input.icon ? input.icon : '',
+                    color: input && input.color ? input.color : '',
+                    createdAt: input && input.createdAt ? input.createdAt : (input && input.updatedAt ? input.updatedAt : nowIso()),
+                    updatedAt: input && input.updatedAt ? input.updatedAt : nowIso()
+                };
+            });
+            const subflowFolders = value.subflowFolders && typeof value.subflowFolders === 'object' ? value.subflowFolders : {};
+            Object.keys(subflowFolders).forEach(function(key) {
+                const input = subflowFolders[key] || {};
+                const p = normalisePath(input.path || key);
+                if (!p) { return; }
+                const parts = p.split('/');
+                const parent = parts.slice(0, -1).join('/');
+                clean.subflowFolders[p] = {
+                    path: storedPath(p),
+                    name: input.name || parts[parts.length - 1],
+                    parent: storedPath(parent),
+                    createdAt: input.createdAt || nowIso(),
+                    updatedAt: input.updatedAt || nowIso(),
+                    color: input.color || '',
+                    icon: input.icon || DEFAULT_FOLDER_ICON,
+                    files: Array.isArray(input.files) ? input.files.filter(Boolean) : [],
+                    folders: Array.isArray(input.folders) ? input.folders.filter(Boolean) : []
+                };
+            });
+            const subflowSource = value.subflows && typeof value.subflows === 'object' ? value.subflows : {};
+            Object.keys(subflowSource).forEach(function(id) {
+                const input = subflowSource[id];
+                let path = '';
+                let name = '';
+                if (typeof input === 'string') { path = input; }
+                else if (input && typeof input === 'object') { path = input.path || input.dir || ''; name = input.name || ''; }
+                clean.subflows[id] = {
+                    id: id,
+                    name: name,
+                    path: storedPath(path),
+                    icon: input && input.icon ? input.icon : '',
+                    color: input && input.color ? input.color : '',
+                    createdAt: input && input.createdAt ? input.createdAt : (input && input.updatedAt ? input.updatedAt : nowIso()),
+                    updatedAt: input && input.updatedAt ? input.updatedAt : nowIso()
+                };
+            });
+        }
+        return clean;
+    }
+
+    function loadConfig() {
+        folderConfig = normaliseConfig(readGlobalFoldersConfig());
+        configLoaded = true;
+        syncStoreFromWorkspaces(false);
+        render();
+        return $.Deferred().resolve(folderConfig).promise();
+    }
+
+    function rebuildFolderIndexes() {
+        folderConfig = normaliseConfig(folderConfig);
+        Object.keys(folderConfig.folders).forEach(function(path) {
+            folderConfig.folders[path].files = [];
+            folderConfig.folders[path].folders = [];
+        });
+        Object.keys(folderConfig.flows).forEach(function(id) {
+            const flow = findWorkspaceById(id);
+            if (flow) { folderConfig.flows[id].name = getLabel(flow); }
+            else { delete folderConfig.flows[id]; }
+        });
+        getWorkspaces().forEach(function(flow) {
+            const p = getPath(flow);
+            if (p) { ensureFolderRecord(p); }
+            folderConfig.flows[flow.id] = Object.assign({}, folderConfig.flows[flow.id] || {}, {
+                id: flow.id,
+                name: getLabel(flow),
+                path: storedPath(p),
+                icon: folderConfig.flows[flow.id] && folderConfig.flows[flow.id].icon ? folderConfig.flows[flow.id].icon : '',
+                color: folderConfig.flows[flow.id] && folderConfig.flows[flow.id].color ? folderConfig.flows[flow.id].color : '',
+                createdAt: folderConfig.flows[flow.id] && folderConfig.flows[flow.id].createdAt ? folderConfig.flows[flow.id].createdAt : nowIso(),
+                updatedAt: folderConfig.flows[flow.id] && folderConfig.flows[flow.id].updatedAt ? folderConfig.flows[flow.id].updatedAt : nowIso()
+            });
+        });
+        Object.keys(folderConfig.folders).forEach(function(path) {
+            const parent = path.split('/').slice(0, -1).join('/');
+            if (parent && folderConfig.folders[parent]) { folderConfig.folders[parent].folders.push(storedPath(path)); }
+        });
+        Object.keys(folderConfig.flows).forEach(function(id) {
+            const p = normalisePath(folderConfig.flows[id].path);
+            if (p) {
+                ensureFolderRecord(p);
+                if (folderConfig.folders[p].files.indexOf(id) === -1) { folderConfig.folders[p].files.push(id); }
+            }
+        });
+        Object.keys(folderConfig.folders).forEach(function(path) {
+            folderConfig.folders[path].files = Array.from(new Set(folderConfig.folders[path].files)).sort();
+            folderConfig.folders[path].folders = Array.from(new Set(folderConfig.folders[path].folders)).sort();
+        });
+        Object.keys(folderConfig.subflowFolders).forEach(function(path) {
+            folderConfig.subflowFolders[path].files = [];
+            folderConfig.subflowFolders[path].folders = [];
+        });
+        Object.keys(folderConfig.subflows).forEach(function(id) {
+            const subflow = findSubflowById(id);
+            if (subflow) { folderConfig.subflows[id].name = getLabel(subflow); }
+            else { delete folderConfig.subflows[id]; }
+        });
+        getSubflows(false).forEach(function(subflow) {
+            const p = getItemPath('subflow', subflow);
+            if (p) { ensureFolderRecordForKind('subflow', p); }
+            folderConfig.subflows[subflow.id] = Object.assign({}, folderConfig.subflows[subflow.id] || {}, {
+                id: subflow.id,
+                name: getLabel(subflow),
+                path: storedPath(p),
+                icon: folderConfig.subflows[subflow.id] && folderConfig.subflows[subflow.id].icon ? folderConfig.subflows[subflow.id].icon : '',
+                color: folderConfig.subflows[subflow.id] && folderConfig.subflows[subflow.id].color ? folderConfig.subflows[subflow.id].color : '',
+                createdAt: folderConfig.subflows[subflow.id] && folderConfig.subflows[subflow.id].createdAt ? folderConfig.subflows[subflow.id].createdAt : nowIso(),
+                updatedAt: folderConfig.subflows[subflow.id] && folderConfig.subflows[subflow.id].updatedAt ? folderConfig.subflows[subflow.id].updatedAt : nowIso()
+            });
+        });
+        Object.keys(folderConfig.subflowFolders).forEach(function(path) {
+            const parent = path.split('/').slice(0, -1).join('/');
+            if (parent && folderConfig.subflowFolders[parent]) { folderConfig.subflowFolders[parent].folders.push(storedPath(path)); }
+        });
+        Object.keys(folderConfig.subflows).forEach(function(id) {
+            const p = normalisePath(folderConfig.subflows[id].path);
+            if (p) {
+                ensureFolderRecordForKind('subflow', p);
+                if (folderConfig.subflowFolders[p].files.indexOf(id) === -1) { folderConfig.subflowFolders[p].files.push(id); }
+            }
+        });
+        Object.keys(folderConfig.subflowFolders).forEach(function(path) {
+            folderConfig.subflowFolders[path].files = Array.from(new Set(folderConfig.subflowFolders[path].files)).sort();
+            folderConfig.subflowFolders[path].folders = Array.from(new Set(folderConfig.subflowFolders[path].folders)).sort();
+        });
+    }
+
+    function saveConfigNow() {
+        folderConfig = normaliseConfig(folderConfig);
+        rebuildFolderIndexes();
+        const saved = writeGlobalFoldersConfig(folderConfig);
+        folderConfig = normaliseConfig(saved);
+        return $.Deferred().resolve(folderConfig).promise();
+    }
+
+    function scheduleConfigSave() {
+        if (configSaveTimer) { clearTimeout(configSaveTimer); }
+        configSaveTimer = setTimeout(function() { configSaveTimer = null; saveConfigNow(); }, 120);
+    }
+
+    function migrateLegacyPathsIntoStore() { }
+
+    function syncStoreFromWorkspaces(save) {
+        folderConfig = normaliseConfig(folderConfig);
+        getWorkspaces().forEach(function(flow) {
+            const id = flow && flow.id;
+            if (!id) { return; }
+            const p = getPath(flow);
+            folderConfig.flows[id] = Object.assign({}, folderConfig.flows[id] || {}, {
+                id: id,
+                name: getLabel(flow),
+                path: storedPath(p),
+                icon: folderConfig.flows[id] && folderConfig.flows[id].icon ? folderConfig.flows[id].icon : '',
+                color: folderConfig.flows[id] && folderConfig.flows[id].color ? folderConfig.flows[id].color : '',
+                createdAt: folderConfig.flows[id] && folderConfig.flows[id].createdAt ? folderConfig.flows[id].createdAt : nowIso(),
+                updatedAt: folderConfig.flows[id] && folderConfig.flows[id].updatedAt ? folderConfig.flows[id].updatedAt : nowIso()
+            });
+        });
+        getSubflows(false).forEach(function(subflow) {
+            const id = subflow && subflow.id;
+            if (!id) { return; }
+            const p = getItemPath('subflow', subflow);
+            folderConfig.subflows[id] = Object.assign({}, folderConfig.subflows[id] || {}, {
+                id: id,
+                name: getLabel(subflow),
+                path: storedPath(p),
+                icon: folderConfig.subflows[id] && folderConfig.subflows[id].icon ? folderConfig.subflows[id].icon : '',
+                color: folderConfig.subflows[id] && folderConfig.subflows[id].color ? folderConfig.subflows[id].color : '',
+                createdAt: folderConfig.subflows[id] && folderConfig.subflows[id].createdAt ? folderConfig.subflows[id].createdAt : nowIso(),
+                updatedAt: folderConfig.subflows[id] && folderConfig.subflows[id].updatedAt ? folderConfig.subflows[id].updatedAt : nowIso()
+            });
+        });
+        rebuildFolderIndexes();
+        if (save !== false) { scheduleConfigSave(); }
+    }
+
+    function ensureFolderRecord(path, patch) {
+        const clean = normalisePath(path);
+        if (!clean) { return null; }
+        folderConfig = normaliseConfig(folderConfig);
+        const parts = clean.split('/');
+        let cursor = '';
+        parts.forEach(function(part, index) {
+            cursor = cursor ? cursor + '/' + part : part;
+            if (!folderConfig.folders[cursor]) {
+                folderConfig.folders[cursor] = {
+                    path: storedPath(cursor),
+                    name: part,
+                    parent: storedPath(cursor.split('/').slice(0, -1).join('/')),
+                    createdAt: nowIso(),
+                    updatedAt: nowIso(),
+                    color: '',
+                    icon: DEFAULT_FOLDER_ICON,
+                    files: [],
+                    folders: []
+                };
+            }
+            if (index === parts.length - 1) { Object.assign(folderConfig.folders[cursor], patch || {}); }
+            folderConfig.folders[cursor].updatedAt = nowIso();
+        });
+        return folderConfig.folders[clean];
+    }
+
+    function getFolderMeta(path) {
+        const clean = normalisePath(path);
+        folderConfig = normaliseConfig(folderConfig);
+        return folderConfig.folders[clean] || { color: '', icon: DEFAULT_FOLDER_ICON };
+    }
+
+    function getFlowMeta(flowOrId) {
+        const id = typeof flowOrId === 'string' ? flowOrId : flowOrId && flowOrId.id;
+        folderConfig = normaliseConfig(folderConfig);
+        const entry = id && folderConfig.flows ? folderConfig.flows[id] : null;
+        return { color: entry && entry.color ? entry.color : '', icon: entry && entry.icon ? entry.icon : DEFAULT_FLOW_ICON };
+    }
+
+    function folderStore(kind) {
+        folderConfig = normaliseConfig(folderConfig);
+        return kind === 'subflow' ? folderConfig.subflowFolders : folderConfig.folders;
+    }
+
+    function itemStore(kind) {
+        folderConfig = normaliseConfig(folderConfig);
+        return kind === 'subflow' ? folderConfig.subflows : folderConfig.flows;
+    }
+
+    function folderKeyType(kind) { return kind === 'subflow' ? 'subflow-folder' : 'folder'; }
+
+    function itemKeyType(kind) { return kind === 'subflow' ? 'subflow' : 'flow'; }
+
+    function findItemByKind(kind, id) { return kind === 'subflow' ? findSubflowById(id) : findWorkspaceById(id); }
+
+    function getItemPath(kind, item) {
+        if (kind !== 'subflow') { return getPath(item); }
+        if (!item || !item.id) { return ''; }
+        const entry = itemStore('subflow')[item.id];
+        if (entry && entry.path !== undefined && entry.path !== null) { return normalisePath(entry.path); }
+        return '';
+    }
+
+    function getItemMeta(kind, itemOrId) {
+        if (kind !== 'subflow') { return getFlowMeta(itemOrId); }
+        const id = typeof itemOrId === 'string' ? itemOrId : itemOrId && itemOrId.id;
+        const entry = id && itemStore('subflow')[id];
+        return { color: entry && entry.color ? entry.color : '', icon: entry && entry.icon ? entry.icon : DEFAULT_FLOW_ICON };
+    }
+
+    function getFolderMetaForKind(kind, path) {
+        const clean = normalisePath(path);
+        const store = folderStore(kind);
+        return store[clean] || { color: '', icon: DEFAULT_FOLDER_ICON };
+    }
+
+    function ensureFolderRecordForKind(kind, path, patch) {
+        if (kind !== 'subflow') { return ensureFolderRecord(path, patch); }
+        const clean = normalisePath(path);
+        if (!clean) { return null; }
+        folderConfig = normaliseConfig(folderConfig);
+        const parts = clean.split('/');
+        let cursor = '';
+        parts.forEach(function(part, index) {
+            cursor = cursor ? cursor + '/' + part : part;
+            if (!folderConfig.subflowFolders[cursor]) {
+                folderConfig.subflowFolders[cursor] = {
+                    path: storedPath(cursor),
+                    name: part,
+                    parent: storedPath(cursor.split('/').slice(0, -1).join('/')),
+                    createdAt: nowIso(),
+                    updatedAt: nowIso(),
+                    color: '',
+                    icon: DEFAULT_FOLDER_ICON,
+                    files: [],
+                    folders: []
+                };
+            }
+            if (index === parts.length - 1) { Object.assign(folderConfig.subflowFolders[cursor], patch || {}); }
+            folderConfig.subflowFolders[cursor].updatedAt = nowIso();
+        });
+        return folderConfig.subflowFolders[clean];
+    }
+
+    function writeSubflowMeta(subflow, patch) {
+        if (!subflow || !subflow.id) { return; }
+        folderConfig = normaliseConfig(folderConfig);
+        const current = folderConfig.subflows[subflow.id] || {};
+        const path = normalisePath((patch && Object.prototype.hasOwnProperty.call(patch, 'path')) ? patch.path : getItemPath('subflow', subflow));
+        folderConfig.subflows[subflow.id] = Object.assign({}, current, {
+            id: subflow.id,
+            name: getLabel(subflow),
+            path: storedPath(path),
+            icon: current.icon || '',
+            color: current.color || '',
+            createdAt: current.createdAt || nowIso(),
+            updatedAt: nowIso()
+        });
+        ensureFolderRecord(path);
+        scheduleConfigSave();
+    }
+
+    function loadEmptyFoldersForKind(kind) {
+        const store = folderStore(kind);
+        return Object.keys(store).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function loadEmptyFolders() {
+        folderConfig = normaliseConfig(folderConfig);
+        return Object.keys(folderConfig.folders).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function saveEmptyFolders(paths) {
+        const keep = new Set(cleanFolderList(paths));
+        folderConfig = normaliseConfig(folderConfig);
+        Object.keys(folderConfig.folders).forEach(path => { if (!keep.has(path)) { delete folderConfig.folders[path]; } });
+        keep.forEach(path => ensureFolderRecord(path));
+        scheduleConfigSave();
+    }
+
+    function addEmptyFolder(path) {
+        const clean = normalisePath(path);
+        if (!clean) { return; }
+        ensureFolderRecord(clean);
+        scheduleConfigSave();
+    }
+
+    function removeEmptyFolder(path) {
+        const clean = normalisePath(path);
+        folderConfig = normaliseConfig(folderConfig);
+        Object.keys(folderConfig.folders).forEach(p => {
+            if (p === clean || p.indexOf(clean + '/') === 0) { delete folderConfig.folders[p]; }
+        });
+        Object.keys(folderConfig.subflowFolders).forEach(p => {
+            if (p === clean || p.indexOf(clean + '/') === 0) { delete folderConfig.subflowFolders[p]; }
+        });
+        Object.keys(folderConfig.flows).forEach(id => {
+            const p = normalisePath(folderConfig.flows[id].path);
+            if (p === clean || p.indexOf(clean + '/') === 0) { folderConfig.flows[id].path = '/'; folderConfig.flows[id].updatedAt = nowIso(); }
+        });
+        Object.keys(folderConfig.subflows).forEach(id => {
+            const p = normalisePath(folderConfig.subflows[id].path);
+            if (p === clean || p.indexOf(clean + '/') === 0) { folderConfig.subflows[id].path = '/'; folderConfig.subflows[id].updatedAt = nowIso(); }
+        });
+        scheduleConfigSave();
+    }
+
+    function removeEmptyFolderForKind(kind, path) {
+        if (kind !== 'subflow') { removeEmptyFolder(path); return; }
+        const clean = normalisePath(path);
+        folderConfig = normaliseConfig(folderConfig);
+        Object.keys(folderConfig.subflowFolders).forEach(p => {
+            if (p === clean || p.indexOf(clean + '/') === 0) { delete folderConfig.subflowFolders[p]; }
+        });
+        Object.keys(folderConfig.subflows).forEach(id => {
+            const p = normalisePath(folderConfig.subflows[id].path);
+            if (p === clean || p.indexOf(clean + '/') === 0) { folderConfig.subflows[id].path = '/'; folderConfig.subflows[id].updatedAt = nowIso(); }
+        });
+        scheduleConfigSave();
+    }
+
+    function folderExists(path) {
+        const clean = normalisePath(path);
+        if (!clean) { return true; }
+        if (loadEmptyFolders().indexOf(clean) !== -1) { return true; }
+        return getWorkspaces().some(flow => {
+            const p = getPath(flow);
+            return p === clean || p.indexOf(clean + '/') === 0;
+        });
+    }
+
+    function folderExistsForKind(kind, path) {
+        if (kind !== 'subflow') { return folderExists(path); }
+        const clean = normalisePath(path);
+        if (!clean) { return true; }
+        if (loadEmptyFoldersForKind('subflow').indexOf(clean) !== -1) { return true; }
+        return getSubflows(false).some(subflow => {
+            const p = getItemPath('subflow', subflow);
+            return p === clean || p.indexOf(clean + '/') === 0;
+        });
+    }
+
+    function allPaths() {
+        const paths = new Set();
+        loadEmptyFolders().forEach(path => paths.add(path));
+        getWorkspaces().forEach(flow => {
+            const path = getPath(flow);
+            if (!path) { return; }
+            const parts = path.split('/');
+            for (let i = 1; i <= parts.length; i++) { paths.add(parts.slice(0, i).join('/')); }
+        });
+        return Array.from(paths).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function allSubflowPaths() {
+        const paths = new Set();
+        loadEmptyFoldersForKind('subflow').forEach(path => paths.add(path));
+        getSubflows(false).forEach(subflow => {
+            const path = getItemPath('subflow', subflow);
+            if (!path) { return; }
+            const parts = path.split('/');
+            for (let i = 1; i <= parts.length; i++) { paths.add(parts.slice(0, i).join('/')); }
+        });
+        return Array.from(paths).sort((a, b) => a.localeCompare(b, undefined, { sensitivity: 'base' }));
+    }
+
+    function iconColumnForLevel(level) {
+        const cleanLevel = Math.max(0, Number(level) || 0);
+        if (cleanLevel === 0) { return 15; }
+        return 22 + ((cleanLevel - 1) * 12);
+    }
+
+    function labelBase(depth, expanded, selectedClass, options) {
+        options = options || {};
+        const label = $('<div>', { class: 'red-ui-treeList-label' + (expanded ? ' expanded' : '') + (selectedClass ? ' selected focus' : '') });
+        const level = Object.prototype.hasOwnProperty.call(options, 'level') ? options.level : Math.max(0, (Number(depth) || 0) - 1);
+        const iconColumn = iconColumnForLevel(level);
+        const indent = Object.prototype.hasOwnProperty.call(options, 'indent') ? options.indent : (options.hasToggle ? Math.max(0, iconColumn - 15) : iconColumn);
+        label.append($('<span>', { class: 'folders-indent' }).css('width', indent + 'px'));
+        return label;
+    }
+
+    function renderSection(title, key, isEmpty, renderChildren) {
+        const pathKey = '__section__' + key;
+        const isCollapsed = collapsed.has(pathKey);
+        const li = $('<li>').appendTo(tree);
+        const content = $('<div>', { class: 'red-ui-editableList-item-content' + (!isCollapsed ? ' expanded' : '') }).appendTo(li);
+        const label = labelBase(0, !isCollapsed, false, { indent: 0 }).appendTo(content);
+        label.append('<span class="red-ui-treeList-icon folders-toggle"><i class="fa fa-angle-right"></i></span>');
+        label.append($('<span>', { class: 'red-ui-treeList-label-text' }).text(title));
+        if (key === 'workspace') { bindDropTarget(label, ''); }
+        const sub = $('<div>', { class: 'red-ui-editableList' }).appendTo(content);
+        const border = $('<div>', { class: 'red-ui-editableList-border red-ui-editableList-container' }).appendTo(sub);
+        const childList = $('<ol>', { class: 'red-ui-treeList-list red-ui-editableList-list' }).appendTo(border);
+        if (isEmpty) { renderEmpty(childList, 1); }
+        else if (typeof renderChildren === 'function') { renderChildren(childList); }
+        if (isCollapsed) { childList.hide(); }
+        label.on('click', function(e) { if ($(e.target).closest('button,input').length) { return; } e.preventDefault(); e.stopPropagation(); toggleCollapse(pathKey, content, childList); });
+        label.on('contextmenu', function(e) { e.preventDefault(); openContextMenu(e, { type: 'workspace', path: '' }); });
+    }
+
+    function renderEmpty(list, depth) {
+        const li = $('<li>').appendTo(list);
+        const content = $('<div>', { class: 'red-ui-editableList-item-content' }).appendTo(li);
+        const label = labelBase(depth, false, false).appendTo(content);
+        label.append('<span class="red-ui-treeList-icon"></span>');
+        label.append($('<div>', { class: 'red-ui-info-outline-item red-ui-info-outline-item-empty' }).text('No search results'));
+    }
+
+    function renderFolderList(list, folder, depth) {
+        const folderNames = Object.keys(folder.folders).sort((a, b) => sortDir === 'desc' ? b.localeCompare(a, undefined, { sensitivity: 'base' }) : a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        folderNames.forEach(name => renderFolder(list, folder.folders[name], depth));
+        const flowLevel = folder.path ? Math.max(1, depth - 1) : 0;
+        folder.flows.sort(compareFlows).forEach(item => {
+            if (item && item._foldersKind === 'subflow') { renderSubflow(list, item, flowLevel); }
+            else { renderFlow(list, item, flowLevel); }
+        });
+    }
+
+    function folderFlows(path) {
+        const clean = normalisePath(path);
+        const flows = flowsInFolder(path);
+        getSubflows(false).forEach(function(subflow) {
+            const p = getItemPath('subflow', subflow);
+            if (p === clean || p.indexOf(clean + '/') === 0) { flows.push(subflow); }
+        });
+        return flows;
+    }
+
+    function folderStateFlows(path) {
+        return flowsInFolder(path);
+    }
+
+    function folderStateItems(path, kind) {
+        return kind === 'hidden' ? folderFlows(path) : folderStateFlows(path);
+    }
+
+    function folderAllActive(path, kind) {
+        const flows = folderStateItems(path, kind);
+        if (!flows.length) { return false; }
+        if (kind === 'hidden') { return flows.every(isHidden); }
+        if (kind === 'disabled') { return flows.every(isDisabled); }
+        if (kind === 'locked') { return flows.every(isLocked); }
+        return false;
+    }
+
+    function setFolderFlowState(path, kind) {
+        const flows = folderStateItems(path, kind);
+        if (!flows.length) { return; }
+        const allActive = folderAllActive(path, kind);
+        flows.forEach(function(flow) {
+            const active = kind === 'hidden' ? isHidden(flow) : kind === 'disabled' ? isDisabled(flow) : isLocked(flow);
+            if (allActive && active) { toggleFlowState(flow, kind); }
+            if (!allActive && !active) { toggleFlowState(flow, kind); }
+        });
+        setTimeout(render, 250);
+    }
+
+    function flowKeyForState(flow) {
+        if (!flow || !flow.id) { return ''; }
+        return (flow.type === 'subflow' || flow._foldersKind === 'subflow') ? itemKey('subflow', flow.id) : itemKey('flow', flow.id);
+    }
+
+    function selectedStateTargets(clickedFlow, kind) {
+        const clickedKey = flowKeyForState(clickedFlow);
+        const keys = clickedKey && selectedKeys.has(clickedKey) ? Array.from(selectedKeys) : [clickedKey];
+        const targets = [];
+        const seen = new Set();
+
+        function add(flow) {
+            if (!flow || !flow.id || seen.has(flow.id)) { return; }
+            if ((flow.type === 'subflow' || flow._foldersKind === 'subflow') && kind !== 'hidden') { return; }
+            seen.add(flow.id);
+            targets.push(flow);
+        }
+
+        keys.forEach(function(key) {
+            if (!key) { return; }
+            if (key.indexOf('folder:') === 0) { folderStateItems(key.slice(7), kind).forEach(add); return; }
+            if (key.indexOf('flow:') === 0) { add(findWorkspaceById(key.slice(5))); return; }
+            if (key.indexOf('subflow:') === 0 && kind === 'hidden') { add(findSubflowById(key.slice(8))); }
+        });
+
+        return targets.length ? targets : [clickedFlow].filter(Boolean);
+    }
+
+    function toggleSelectedFlowState(clickedFlow, kind) {
+        selectedStateTargets(clickedFlow, kind).forEach(function(flow) {
+            toggleFlowState(flow, kind);
+        });
+    }
+
+    function renderFolderStateButtons(actions, path) {
+        const hideButton = $('<button type="button" class="red-ui-info-outline-item-control-hide red-ui-button red-ui-button-small" aria-label="Hide" title="Hide"><i class="fa fa-eye folders-icon-off"></i><i class="fa fa-eye-slash folders-icon-on"></i></button>').appendTo(actions);
+        applyStateButton(hideButton, folderAllActive(path, 'hidden'));
+        hideButton.attr('title', folderAllActive(path, 'hidden') ? 'Show all flows in folder' : 'Hide all flows in folder').on('click', function(e){ e.preventDefault(); e.stopPropagation(); setFolderFlowState(path, 'hidden'); });
+
+        const disableButton = $('<button type="button" class="red-ui-info-outline-item-control-disable red-ui-button red-ui-button-small" aria-label="Disable" title="Disable"><i class="fa fa-circle-thin folders-icon-off"></i><i class="fa fa-ban folders-icon-on"></i></button>').appendTo(actions);
+        applyStateButton(disableButton, folderAllActive(path, 'disabled'));
+        disableButton.attr('title', folderAllActive(path, 'disabled') ? 'Enable all flows in folder' : 'Disable all flows in folder').on('click', function(e){ e.preventDefault(); e.stopPropagation(); setFolderFlowState(path, 'disabled'); });
+
+        const lockButton = $('<button type="button" class="red-ui-info-outline-item-control-lock red-ui-button red-ui-button-small" aria-label="Lock" title="Lock"><i class="fa fa-unlock-alt folders-icon-off"></i><i class="fa fa-lock folders-icon-on"></i></button>').appendTo(actions);
+        applyStateButton(lockButton, folderAllActive(path, 'locked'));
+        lockButton.attr('title', folderAllActive(path, 'locked') ? 'Unlock all flows in folder' : 'Lock all flows in folder').on('click', function(e){ e.preventDefault(); e.stopPropagation(); setFolderFlowState(path, 'locked'); });
+    }
+
+    function renderFolder(list, folder, depth) {
+        const hasContent = folderHasContent(folder);
+        const isCollapsed = hasContent && collapsed.has(folder.path);
+        const li = $('<li>').appendTo(list);
+        const content = $('<div>', { class: 'red-ui-editableList-item-content' + (!isCollapsed ? ' expanded' : '') }).appendTo(li);
+        visibleOrder.push(itemKey('folder', folder.path));
+        const isSelected = isItemSelected('folder', folder.path);
+        const meta = getFolderMeta(folder.path);
+        const folderLevel = Math.max(0, depth - 1);
+        const stateClasses = folderAllActive(folder.path, 'disabled') ? ' folders-disabled' : '';
+        const label = labelBase(depth, !isCollapsed, isSelected, { level: folderLevel, hasToggle: true }).addClass(stateClasses).appendTo(content);
+        const folderToggle = $('<span class="red-ui-treeList-icon folders-toggle">' + (hasContent ? '<i class="fa fa-angle-right"></i>' : '') + '</span>').appendTo(label);
+        const folderIcon = $('<span>', { class: 'red-ui-treeList-icon' }).html(iconHtml(meta.icon || DEFAULT_FOLDER_ICON)).appendTo(label);
+        if (meta.color) { applyIconColor(folderIcon.find('i'), meta.color); }
+        if (editingFolderPath === folder.path) {
+            const inputWidth = Math.max(38, Math.min(128, ((folder.name || 'New folder').length + 1) * 7));
+            const input = $('<input>', { class: 'folders-inline-folder', type: 'text', value: folder.name }).css('width', inputWidth + 'px').appendTo(label);
+            setTimeout(function(){ input.trigger('focus').trigger('select'); }, 0);
+            let renameFinished = false;
+            function commit() {
+                if (renameFinished) { return; }
+                renameFinished = true;
+                const raw = String(input.val() || '').trim();
+                const typed = normalisePath(raw).replace(/\//g, '') || 'New folder';
+                const parent = folder.path.split('/').slice(0, -1).join('/');
+                let finalPath = folder.path;
+                if ((parent ? parent + '/' + typed : typed) !== folder.path) {
+                    finalPath = moveFolderPath(folder.path, parent, typed);
+                    if (isSelected) {
+                        selected = { type: 'folder', path: finalPath };
+                        selectedKeys = new Set([itemKey('folder', finalPath)]);
+                    }
+                    saveConfigNow();
+                    markDirty();
+                }
+                editingFolderPath = null;
+                editingFolderOriginal = null;
+                render();
+                if (isSelected) { forceInfoPanelUpdate(); }
+            }
+            function cancel() {
+                if (renameFinished) { return; }
+                renameFinished = true;
+                if (editingFolderOriginal === null) { removeEmptyFolder(folder.path); }
+                editingFolderPath = null; editingFolderOriginal = null; render();
+            }
+            input.on('click dblclick dragstart', function(e){ e.stopPropagation(); });
+            input.on('keydown', function(e){ const code = e.which || e.keyCode; if (e.key === 'Enter' || code === 13) { e.preventDefault(); e.stopPropagation(); commit(); } if (e.key === 'Escape' || code === 27) { e.preventDefault(); e.stopPropagation(); cancel(); } });
+            input.on('blur', function(){ setTimeout(commit, 0); });
+        } else {
+            label.append($('<span>', { class: 'red-ui-treeList-label-text folders-folder-label', title: folder.path }).text(folder.name));
+            const actions = $('<div>', { class: 'red-ui-info-outline-item-controls red-ui-info-outline-item-hover-controls folders-folder-actions' }).appendTo(label);
+            renderFolderStateButtons(actions, folder.path);
+            $('<button type="button" class="red-ui-info-outline-item-control-lock red-ui-button red-ui-button-small" aria-label="Rename" title="Rename"><i class="fa fa-pencil"></i></button>').appendTo(actions).on('click', function(e) { e.preventDefault(); e.stopPropagation(); editingFolderPath = folder.path; editingFolderOriginal = folder.path; render(); });
+        }
+        const sub = $('<div>', { class: 'red-ui-editableList' }).appendTo(content);
+        const border = $('<div>', { class: 'red-ui-editableList-border red-ui-editableList-container' }).appendTo(sub);
+        const childList = $('<ol>', { class: 'red-ui-treeList-list red-ui-editableList-list' }).appendTo(border);
+        renderFolderList(childList, folder, depth + 1);
+        if (isCollapsed) { childList.hide(); }
+        folderToggle.on('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectItem('folder', folder.path, e);
+            label.addClass('selected focus');
+            if (hasContent) { toggleCollapse(folder.path, content, childList); }
+            forceInfoPanelUpdate();
+        });
+        label.on('click', function(e) { if ($(e.target).closest('button,input,.folders-toggle').length) { return; } selectItem('folder', folder.path, e); render(); forceInfoPanelUpdate(); });
+        label.on('contextmenu', function(e) { e.preventDefault(); openContextMenu(e, { type: 'folder', path: folder.path }); });
+        bindDraggable(label, 'folder', folder.path);
+        bindDropTarget(label, folder.path);
+    }
+
+    function applyStateButton(button, active) {
+        button.toggleClass('folders-state-active', !!active);
+    }
+
+    function commitItemRename(kind, item, name) {
+        const nextName = String(name || '').trim();
+        if (!item || !item.id || !nextName) { return; }
+        if (kind === 'subflow') {
+            item.name = nextName;
+            item.label = nextName;
+            writeSubflowMeta(item, { path: getItemPath('subflow', item) });
+        } else {
+            item.label = nextName;
+            writeMetaEverywhere(item.id, { path: getPath(item) });
+        }
+        markDirty(item);
+        if (selectedKeys.has(itemKey(kind, item.id))) { forceInfoPanelUpdate(); }
+    }
+
+    function renderSubflow(list, subflow, depth) {
+        visibleOrder.push(itemKey('subflow', subflow.id));
+        const isSelected = isItemSelected('subflow', subflow.id);
+        const li = $('<li>').appendTo(list);
+        const content = $('<div>', { class: 'red-ui-editableList-item-content' }).appendTo(li);
+        const stateClasses = (isHidden(subflow) ? ' folders-hidden' : '') + (isDisabled(subflow) ? ' folders-disabled' : '') + (isLocked(subflow) ? ' folders-locked' : '');
+        const label = labelBase(depth, false, isSelected, { level: depth }).addClass(stateClasses).appendTo(content);
+        const subflowMeta = getItemMeta('subflow', subflow);
+        const subflowIconWrap = $('<span>', { class: 'folders-subflow-icon-wrap' }).appendTo(label);
+        const subflowIcon = $('<span>', { class: 'red-ui-treeList-icon' }).html(iconHtml(subflowMeta.icon || DEFAULT_FLOW_ICON)).appendTo(subflowIconWrap);
+        if (subflowMeta.color) { applyIconColor(subflowIcon.find('i'), subflowMeta.color); }
+        $('<span>', { class: 'folders-subflow-badge', title: 'Subflow' }).text('S').appendTo(subflowIconWrap);
+        const item = $('<div>', { class: 'red-ui-info-outline-item red-ui-info-outline-item-flow' }).appendTo(label);
+        if (editingItemKey === itemKey('subflow', subflow.id)) {
+            const input = $('<input>', { class: 'folders-inline-folder', type: 'text', value: getLabel(subflow) }).appendTo(item);
+            setTimeout(function(){ input.trigger('focus').trigger('select'); }, 0);
+            let done = false;
+            function commit() { if (done) { return; } done = true; commitItemRename('subflow', subflow, input.val()); editingItemKey = null; render(); }
+            function cancel() { if (done) { return; } done = true; editingItemKey = null; render(); }
+            input.on('click dblclick dragstart contextmenu', function(e){ e.stopPropagation(); });
+            input.on('keydown', function(e){ const code = e.which || e.keyCode; if (e.key === 'Enter' || code === 13) { e.preventDefault(); e.stopPropagation(); commit(); } if (e.key === 'Escape' || code === 27) { e.preventDefault(); e.stopPropagation(); cancel(); } });
+            input.on('blur', function(){ setTimeout(commit, 0); });
+        } else {
+            item.append($('<div>', { class: 'red-ui-search-result-description red-ui-info-outline-item-label', title: getLabel(subflow) }).text(getLabel(subflow)));
+        }
+        const controls = $('<div>', { class: 'red-ui-info-outline-item-controls red-ui-info-outline-item-hover-controls' }).appendTo(item);
+        const hideButton = $('<button type="button" class="red-ui-info-outline-item-control-hide red-ui-button red-ui-button-small" aria-label="Hide" title="Hide"><i class="fa fa-eye folders-icon-off"></i><i class="fa fa-eye-slash folders-icon-on"></i></button>').appendTo(controls);
+        applyStateButton(hideButton, isHidden(subflow));
+        hideButton.attr('title', isHidden(subflow) ? 'Show' : 'Hide').on('click', function(e){ e.preventDefault(); e.stopPropagation(); toggleSelectedFlowState(subflow, 'hidden'); });
+        $('<button type="button" class="red-ui-info-outline-item-control-users red-ui-button red-ui-button-small" aria-label="Subflow instances" title="Subflow instances"></button>').text(countSubflowInstances(subflow)).appendTo(controls);
+        label.on('click', function(e) {
+            if ($(e.target).closest('button,input,.folders-toggle').length) { return; }
+            selectItem('subflow', subflow.id, e);
+            if (!(e.ctrlKey || e.metaKey || e.shiftKey)) { showWorkspace(subflow.id); }
+            render();
+            setTimeout(updateInfoPanel, 80);
+        });
+        label.on('contextmenu', function(e) {
+            e.preventDefault();
+            openContextMenu(e, { type: 'subflow', id: subflow.id, path: getItemPath('subflow', subflow) });
+        });
+        label.on('dblclick', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openWorkspaceEditFromTab(subflow.id);
+        });
+        bindDraggable(label, 'subflow', subflow.id);
+    }
+
+    function renderSubflowFolderList(list, folder, depth) {
+        const folderNames = Object.keys(folder.folders).sort((a, b) => sortDir === 'desc' ? b.localeCompare(a, undefined, { sensitivity: 'base' }) : a.localeCompare(b, undefined, { sensitivity: 'base' }));
+        folderNames.forEach(name => renderSubflowFolder(list, folder.folders[name], depth));
+        const subflowLevel = folder.path ? Math.max(1, depth - 1) : 0;
+        folder.flows.sort(compareFlows).forEach(subflow => renderSubflow(list, subflow, subflowLevel));
+    }
+
+    function renderSubflowFolder(list, folder, depth) {
+        const hasContent = folderHasContent(folder);
+        const isCollapsed = hasContent && collapsed.has('subflow-folder:' + folder.path);
+        const li = $('<li>').appendTo(list);
+        const content = $('<div>', { class: 'red-ui-editableList-item-content' + (!isCollapsed ? ' expanded' : '') }).appendTo(li);
+        visibleOrder.push(itemKey('subflow-folder', folder.path));
+        const isSelected = isItemSelected('subflow-folder', folder.path);
+        const meta = getFolderMetaForKind('subflow', folder.path);
+        const folderLevel = Math.max(0, depth - 1);
+        const label = labelBase(depth, !isCollapsed, isSelected, { level: folderLevel, hasToggle: true }).appendTo(content);
+        const folderToggle = $('<span class="red-ui-treeList-icon folders-toggle">' + (hasContent ? '<i class="fa fa-angle-right"></i>' : '') + '</span>').appendTo(label);
+        const folderIcon = $('<span>', { class: 'red-ui-treeList-icon' }).html(iconHtml(meta.icon || DEFAULT_FOLDER_ICON)).appendTo(label);
+        if (meta.color) { applyIconColor(folderIcon.find('i'), meta.color); }
+        if (editingFolderPath === 'subflow:' + folder.path) {
+            const inputWidth = Math.max(38, Math.min(128, ((folder.name || 'New folder').length + 1) * 7));
+            const input = $('<input>', { class: 'folders-inline-folder', type: 'text', value: folder.name }).css('width', inputWidth + 'px').appendTo(label);
+            setTimeout(function(){ input.trigger('focus').trigger('select'); }, 0);
+            let renameFinished = false;
+            function commit() {
+                if (renameFinished) { return; }
+                renameFinished = true;
+                const raw = String(input.val() || '').trim();
+                const typed = normalisePath(raw).replace(/\//g, '') || 'New folder';
+                const parent = folder.path.split('/').slice(0, -1).join('/');
+                let finalPath = folder.path;
+                if ((parent ? parent + '/' + typed : typed) !== folder.path) {
+                    finalPath = moveSubflowFolderPath(folder.path, parent, typed);
+                    selected = { type: 'subflow-folder', path: finalPath };
+                    selectedKeys = new Set([itemKey('subflow-folder', finalPath)]);
+                    saveConfigNow();
+                    markDirty();
+                }
+                editingFolderPath = null;
+                editingFolderOriginal = null;
+                render();
+            }
+            function cancel() {
+                if (renameFinished) { return; }
+                renameFinished = true;
+                if (editingFolderOriginal === null) { removeEmptyFolderForKind('subflow', folder.path); }
+                editingFolderPath = null; editingFolderOriginal = null; render();
+            }
+            input.on('click dblclick dragstart', function(e){ e.stopPropagation(); });
+            input.on('keydown', function(e){ const code = e.which || e.keyCode; if (e.key === 'Enter' || code === 13) { e.preventDefault(); e.stopPropagation(); commit(); } if (e.key === 'Escape' || code === 27) { e.preventDefault(); e.stopPropagation(); cancel(); } });
+            input.on('blur', function(){ setTimeout(commit, 0); });
+        } else {
+            label.append($('<span>', { class: 'red-ui-treeList-label-text folders-folder-label', title: folder.path }).text(folder.name));
+            const actions = $('<div>', { class: 'red-ui-info-outline-item-controls red-ui-info-outline-item-hover-controls folders-folder-actions' }).appendTo(label);
+            $('<button type="button" class="red-ui-info-outline-item-control-lock red-ui-button red-ui-button-small" aria-label="Rename" title="Rename"><i class="fa fa-pencil"></i></button>').appendTo(actions).on('click', function(e) { e.preventDefault(); e.stopPropagation(); editingFolderPath = 'subflow:' + folder.path; editingFolderOriginal = folder.path; render(); });
+        }
+        const sub = $('<div>', { class: 'red-ui-editableList' }).appendTo(content);
+        const border = $('<div>', { class: 'red-ui-editableList-border red-ui-editableList-container' }).appendTo(sub);
+        const childList = $('<ol>', { class: 'red-ui-treeList-list red-ui-editableList-list' }).appendTo(border);
+        renderSubflowFolderList(childList, folder, depth + 1);
+        if (isCollapsed) { childList.hide(); }
+        folderToggle.on('click', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            selectItem('subflow-folder', folder.path, e);
+            label.addClass('selected focus');
+            if (hasContent) { toggleCollapse('subflow-folder:' + folder.path, content, childList); }
+        });
+        label.on('click', function(e) { if ($(e.target).closest('button,input,.folders-toggle').length) { return; } selectItem('subflow-folder', folder.path, e); render(); });
+        bindDraggable(label, 'subflow-folder', folder.path);
+        bindDropTarget(label, 'subflow:' + folder.path);
+    }
+
+    function renderFlow(list, flow, depth) {
+        const activeId = getCurrentWorkspaceId();
+        if (!selected && activeId && flow.id === activeId) { selected = { type: 'flow', id: activeId }; selectedKeys = new Set([itemKey('flow', activeId)]); }
+        visibleOrder.push(itemKey('flow', flow.id));
+        const isSelected = isItemSelected('flow', flow.id);
+        const li = $('<li>').appendTo(list);
+        const content = $('<div>', { class: 'red-ui-editableList-item-content' }).appendTo(li);
+        const stateClasses = (isHidden(flow) ? ' folders-hidden' : '') + (isDisabled(flow) ? ' folders-disabled' : '') + (isLocked(flow) ? ' folders-locked' : '');
+        const flowMeta = getFlowMeta(flow);
+        const label = labelBase(depth, false, isSelected, { level: depth }).addClass(stateClasses).appendTo(content);
+        const flowIcon = $('<span>', { class: 'red-ui-treeList-icon' }).html(iconHtml(flowMeta.icon || DEFAULT_FLOW_ICON)).appendTo(label);
+        if (flowMeta.color) { applyIconColor(flowIcon.find('i'), flowMeta.color); }
+        const item = $('<div>', { class: 'red-ui-info-outline-item red-ui-info-outline-item-flow' }).appendTo(label);
+        if (editingItemKey === itemKey('flow', flow.id)) {
+            const input = $('<input>', { class: 'folders-inline-folder', type: 'text', value: getLabel(flow) }).appendTo(item);
+            setTimeout(function(){ input.trigger('focus').trigger('select'); }, 0);
+            let done = false;
+            function commit() { if (done) { return; } done = true; commitItemRename('flow', flow, input.val()); editingItemKey = null; render(); }
+            function cancel() { if (done) { return; } done = true; editingItemKey = null; render(); }
+            input.on('click dblclick dragstart contextmenu', function(e){ e.stopPropagation(); });
+            input.on('keydown', function(e){ const code = e.which || e.keyCode; if (e.key === 'Enter' || code === 13) { e.preventDefault(); e.stopPropagation(); commit(); } if (e.key === 'Escape' || code === 27) { e.preventDefault(); e.stopPropagation(); cancel(); } });
+            input.on('blur', function(){ setTimeout(commit, 0); });
+        } else {
+            item.append($('<div>', { class: 'red-ui-search-result-description red-ui-info-outline-item-label', title: getLabel(flow) }).text(getLabel(flow)));
+        }
+        const controls = $('<div>', { class: 'red-ui-info-outline-item-controls red-ui-info-outline-item-hover-controls' }).appendTo(item);
+        const hideButton = $('<button type="button" class="red-ui-info-outline-item-control-hide red-ui-button red-ui-button-small" aria-label="Hide" title="Hide"><i class="fa fa-eye folders-icon-off"></i><i class="fa fa-eye-slash folders-icon-on"></i></button>').appendTo(controls);
+        applyStateButton(hideButton, isHidden(flow));
+        hideButton.attr('title', isHidden(flow) ? 'Show' : 'Hide').on('click', function(e){ e.preventDefault(); e.stopPropagation(); toggleSelectedFlowState(flow, 'hidden'); });
+        const disableButton = $('<button type="button" class="red-ui-info-outline-item-control-disable red-ui-button red-ui-button-small" aria-label="Disable" title="Disable"><i class="fa fa-circle-thin folders-icon-off"></i><i class="fa fa-ban folders-icon-on"></i></button>').appendTo(controls);
+        applyStateButton(disableButton, isDisabled(flow));
+        disableButton.attr('title', isDisabled(flow) ? 'Enable' : 'Disable').on('click', function(e){ e.preventDefault(); e.stopPropagation(); toggleSelectedFlowState(flow, 'disabled'); });
+        const lockButton = $('<button type="button" class="red-ui-info-outline-item-control-lock red-ui-button red-ui-button-small" aria-label="Lock" title="Lock"><i class="fa fa-unlock-alt folders-icon-off"></i><i class="fa fa-lock folders-icon-on"></i></button>').appendTo(controls);
+        applyStateButton(lockButton, isLocked(flow));
+        lockButton.attr('title', isLocked(flow) ? 'Unlock' : 'Lock').on('click', function(e){ e.preventDefault(); e.stopPropagation(); toggleSelectedFlowState(flow, 'locked'); });
+        label.on('click', function(e) {
+            if ($(e.target).closest('button,input,.folders-toggle').length) { return; }
+            selectItem('flow', flow.id, e);
+            if (!(e.ctrlKey || e.metaKey || e.shiftKey)) { showWorkspace(flow.id); }
+            render();
+            setTimeout(updateInfoPanel, 80);
+        });
+        label.on('contextmenu', function(e) {
+            e.preventDefault();
+            openContextMenu(e, { type: 'flow', id: flow.id, path: getPath(flow) });
+        });
+        label.on('dblclick', function(e) {
+            e.preventDefault();
+            e.stopPropagation();
+            openWorkspaceEditFromTab(flow.id);
+        });
+        bindDraggable(label, 'flow', flow.id);
+    }
+
+    function render() {
+        if (!tree) { return; }
+        try {
+            const flows = getWorkspaces();
+            const subflows = getSubflows(false);
+            const q = searchInput ? searchInput.val() : '';
+            const model = buildModel(flows, q, subflows);
+            tree.empty();
+            visibleOrder = [];
+            if (!folderHasContent(model)) { renderEmpty(tree, 0); }
+            else { renderFolderList(tree, model, 1); }
+            updateFooterButtons();
+        } catch (err) { console.warn('Folders render failed; using simple list fallback.', err); renderSimpleFallback(); }
+    }
+
+    function renderSimpleFallback() {
+        if (!tree) { return; }
+        const flows = getWorkspaces();
+        const q = String(searchInput ? searchInput.val() : '').trim().toLowerCase();
+        tree.empty();
+        visibleOrder = [];
+        const subflows = getSubflows(false);
+        if (flows.length === 0 && subflows.length === 0) {
+            renderEmpty(tree, 0);
+        } else {
+            flows.forEach(flow => {
+                const haystack = `${getLabel(flow)} ${getPath(flow)} ${getInfo(flow)}`.toLowerCase();
+                if (q && haystack.indexOf(q) === -1) { return; }
+                if (!flowPassesFilter(flow)) { return; }
+                renderFlow(tree, flow, 0);
+            });
+            subflows.forEach(subflow => {
+                const haystack = `${getLabel(subflow)} ${getItemPath('subflow', subflow)} ${getInfo(subflow)}`.toLowerCase();
+                if (q && haystack.indexOf(q) === -1) { return; }
+                if (!flowPassesFilter(subflow)) { return; }
+                renderSubflow(tree, subflow, 0);
+            });
+        }
+        updateFooterButtons();
+    }
+
+    function moveFlowTo(flow, targetPath) {
+        if (!flow) { return; }
+        writeMetaEverywhere(flow.id || flow, { path: normalisePath(targetPath) });
+        markDirty(flow);
+    }
+
+    function moveSubflowTo(subflow, targetPath) {
+        if (!subflow) { return; }
+        writeSubflowMeta(subflow, { path: normalisePath(targetPath) });
+        markDirty(subflow);
+    }
+
+    function moveFolderPath(oldPath, newParent, newName) {
+        const cleanOld = normalisePath(oldPath);
+        const cleanParent = normalisePath(newParent);
+        const cleanName = normalisePath(newName).replace(/\//g, '');
+        if (!cleanOld || !cleanName) { return cleanOld; }
+        const cleanNew = cleanParent ? cleanParent + '/' + cleanName : cleanName;
+        if (cleanNew === cleanOld || cleanNew.indexOf(cleanOld + '/') === 0) { return cleanOld; }
+        folderConfig = normaliseConfig(folderConfig);
+        const nextFolders = {};
+        Object.keys(folderConfig.folders).forEach(function(path) {
+            let nextPath = path;
+            if (path === cleanOld) { nextPath = cleanNew; }
+            else if (path.indexOf(cleanOld + '/') === 0) { nextPath = cleanNew + path.slice(cleanOld.length); }
+            const parts = nextPath.split('/');
+            nextFolders[nextPath] = Object.assign({}, folderConfig.folders[path], {
+                path: storedPath(nextPath),
+                name: parts[parts.length - 1] || folderConfig.folders[path].name,
+                parent: storedPath(parts.slice(0, -1).join('/')),
+                updatedAt: nowIso()
+            });
+        });
+        folderConfig.folders = nextFolders;
+        scheduleConfigSave();
+        getWorkspaces().forEach(flow => {
+            const p = getPath(flow);
+            if (p === cleanOld || p.indexOf(cleanOld + '/') === 0) { moveFlowTo(flow, cleanNew + p.slice(cleanOld.length)); }
+        });
+        moveSubflowFolderBranch(cleanOld, cleanNew);
+        return cleanNew;
+    }
+
+    function moveSubflowFolderBranch(cleanOld, cleanNew) {
+        const nextFolders = {};
+        Object.keys(folderConfig.subflowFolders).forEach(function(path) {
+            let nextPath = path;
+            if (path === cleanOld) { nextPath = cleanNew; }
+            else if (path.indexOf(cleanOld + '/') === 0) { nextPath = cleanNew + path.slice(cleanOld.length); }
+            const parts = nextPath.split('/');
+            nextFolders[nextPath] = Object.assign({}, folderConfig.subflowFolders[path], {
+                path: storedPath(nextPath),
+                name: parts[parts.length - 1] || folderConfig.subflowFolders[path].name,
+                parent: storedPath(parts.slice(0, -1).join('/')),
+                updatedAt: nowIso()
+            });
+        });
+        folderConfig.subflowFolders = nextFolders;
+        getSubflows(false).forEach(function(subflow) {
+            const p = getItemPath('subflow', subflow);
+            if (p === cleanOld || p.indexOf(cleanOld + '/') === 0) {
+                moveSubflowTo(subflow, cleanNew + p.slice(cleanOld.length));
+            }
+        });
+        scheduleConfigSave();
+    }
+
+    function moveFolderTo(oldPath, targetPath) {
+        const cleanOld = normalisePath(oldPath);
+        const cleanTarget = normalisePath(targetPath);
+        const name = cleanOld.split('/').pop();
+        if (!cleanOld || !name) { return cleanOld; }
+        if (cleanTarget === cleanOld || cleanTarget.indexOf(cleanOld + '/') === 0) { notify('Cannot move a folder into itself.', 'warning'); return cleanOld; }
+        return moveFolderPath(cleanOld, cleanTarget, name);
+    }
+
+    function moveSubflowFolderPath(oldPath, newParent, newName) {
+        const cleanOld = normalisePath(oldPath);
+        const cleanParent = normalisePath(newParent);
+        const cleanName = normalisePath(newName).replace(/\//g, '');
+        if (!cleanOld || !cleanName) { return cleanOld; }
+        const cleanNew = cleanParent ? cleanParent + '/' + cleanName : cleanName;
+        if (cleanNew === cleanOld || cleanNew.indexOf(cleanOld + '/') === 0) { return cleanOld; }
+        folderConfig = normaliseConfig(folderConfig);
+        const nextFolders = {};
+        Object.keys(folderConfig.subflowFolders).forEach(function(path) {
+            let nextPath = path;
+            if (path === cleanOld) { nextPath = cleanNew; }
+            else if (path.indexOf(cleanOld + '/') === 0) { nextPath = cleanNew + path.slice(cleanOld.length); }
+            const parts = nextPath.split('/');
+            nextFolders[nextPath] = Object.assign({}, folderConfig.subflowFolders[path], {
+                path: storedPath(nextPath),
+                name: parts[parts.length - 1] || folderConfig.subflowFolders[path].name,
+                parent: storedPath(parts.slice(0, -1).join('/')),
+                updatedAt: nowIso()
+            });
+        });
+        folderConfig.subflowFolders = nextFolders;
+        scheduleConfigSave();
+        getSubflows(false).forEach(subflow => {
+            const p = getItemPath('subflow', subflow);
+            if (p === cleanOld || p.indexOf(cleanOld + '/') === 0) { moveSubflowTo(subflow, cleanNew + p.slice(cleanOld.length)); }
+        });
+        return cleanNew;
+    }
+
+    function moveSubflowFolderTo(oldPath, targetPath) {
+        const cleanOld = normalisePath(oldPath);
+        const cleanTarget = normalisePath(targetPath);
+        const name = cleanOld.split('/').pop();
+        if (!cleanOld || !name) { return cleanOld; }
+        if (cleanTarget === cleanOld || cleanTarget.indexOf(cleanOld + '/') === 0) { notify('Cannot move a folder into itself.', 'warning'); return cleanOld; }
+        return moveSubflowFolderPath(cleanOld, cleanTarget, name);
+    }
+
+    function selectedFolderPathsFromKeys(keys) {
+        return keys.filter(key => key.indexOf('folder:') === 0).map(key => normalisePath(key.slice(7))).filter(Boolean);
+    }
+
+    function selectedSubflowFolderPathsFromKeys(keys) {
+        return keys.filter(key => key.indexOf('subflow-folder:') === 0).map(key => normalisePath(key.slice(15))).filter(Boolean);
+    }
+
+    function flowIsInsideAnySelectedFolder(flow, folders) {
+        const p = getPath(flow);
+        return folders.some(folder => p === folder || p.indexOf(folder + '/') === 0);
+    }
+
+    function compactFolderSelection(paths) {
+        const sorted = Array.from(new Set(paths)).sort((a,b) => a.length - b.length);
+        return sorted.filter(path => !sorted.some(other => other !== path && path.indexOf(other + '/') === 0));
+    }
+
+    function moveKeysTo(keys, targetPath) {
+        const isSubflowTarget = String(targetPath || '').indexOf('subflow:') === 0;
+        const cleanTarget = normalisePath(isSubflowTarget ? String(targetPath || '').slice(8) : targetPath);
+        const keyList = Array.from(new Set(keys || []));
+        if (isSubflowTarget) {
+            const folderPaths = compactFolderSelection(selectedSubflowFolderPathsFromKeys(keyList));
+            const newKeys = [];
+            folderPaths.forEach(path => {
+                const newPath = moveSubflowFolderTo(path, cleanTarget);
+                newKeys.push(itemKey('subflow-folder', newPath));
+            });
+            keyList.forEach(key => {
+                if (key.indexOf('subflow:') !== 0) { return; }
+                const subflow = findSubflowById(key.slice(8));
+                if (!subflow) { return; }
+                const p = getItemPath('subflow', subflow);
+                if (folderPaths.some(folder => p === folder || p.indexOf(folder + '/') === 0)) { return; }
+                moveSubflowTo(subflow, cleanTarget);
+                newKeys.push(itemKey('subflow', subflow.id));
+            });
+            selectedKeys = new Set(newKeys);
+            setSelectedFromKey(newKeys[0]);
+            markDirty();
+            render();
+            notify('Moved. Deploy to save.');
+            return;
+        }
+        const folderPaths = compactFolderSelection(selectedFolderPathsFromKeys(keyList));
+        const newKeys = [];
+        folderPaths.forEach(path => {
+            const newPath = moveFolderTo(path, cleanTarget);
+            newKeys.push(itemKey('folder', newPath));
+        });
+        keyList.forEach(key => {
+            if (key.indexOf('flow:') !== 0) { return; }
+            const flow = findWorkspaceById(key.slice(5));
+            if (!flow || flowIsInsideAnySelectedFolder(flow, folderPaths)) { return; }
+            moveFlowTo(flow, cleanTarget);
+            newKeys.push(itemKey('flow', flow.id));
+        });
+        keyList.forEach(key => {
+            if (key.indexOf('subflow:') !== 0) { return; }
+            const subflow = findSubflowById(key.slice(8));
+            if (!subflow) { return; }
+            const p = getItemPath('subflow', subflow);
+            if (folderPaths.some(folder => p === folder || p.indexOf(folder + '/') === 0)) { return; }
+            moveSubflowTo(subflow, cleanTarget);
+            newKeys.push(itemKey('subflow', subflow.id));
+        });
+        selectedKeys = new Set(newKeys);
+        setSelectedFromKey(newKeys[0]);
+        markDirty();
+        render();
+        notify('Moved. Deploy to save.');
+    }
+
+    function moveDragItemsTo(targetPath) {
+        if (!dragState) { return; }
+        const keys = dragState.keys || [];
+        dragState = null;
+        moveKeysTo(keys, targetPath);
+    }
+
+    function openFlowDialog(flow) {
+        const meta = readMeta(flow);
+        const paths = allPaths();
+        const datalistId = 'folders-paths-' + Math.floor(Math.random() * 100000);
+        const dialog = $(`<div class="folders-dialog"><div class="folders-form-row"><label for="folders-flow-name">Name</label><input id="folders-flow-name" type="text" value="${esc(getLabel(flow))}"></div><div class="folders-form-row"><label for="folders-flow-path">Directory</label><input id="folders-flow-path" type="text" list="${datalistId}" value="${esc(meta.path || '')}"><datalist id="${datalistId}">${paths.map(path => `<option value="${esc(path)}"></option>`).join('')}</datalist></div><div class="folders-form-row"><label for="folders-flow-info">Description</label><textarea id="folders-flow-info">${esc(getInfo(flow))}</textarea></div></div>`).appendTo('body');
+        dialog.dialog({ modal: true, width: 560, title: 'Edit flow: ' + getLabel(flow), buttons: [ { text: 'Cancel', click: function() { $(this).dialog('destroy').remove(); } }, { text: 'Done', class: 'primary', click: function() { const newName = String($('#folders-flow-name', dialog).val() || '').trim(); const newPath = normalisePath($('#folders-flow-path', dialog).val()); const newInfo = String($('#folders-flow-info', dialog).val() || ''); if (newName) { flow.label = newName; } flow.info = newInfo; writeMetaEverywhere(flow.id || flow, { path: newPath }); markDirty(flow); $(this).dialog('destroy').remove(); render(); notify('Flow updated. Deploy to save.'); } } ], open: function() { $('#folders-flow-name', dialog).trigger('focus').trigger('select'); }, close: function() { dialog.remove(); } });
+    }
+
+    function openSubflowDialog(subflow) {
+        if (!subflow) { return; }
+        const paths = allSubflowPaths();
+        const datalistId = 'folders-subflow-paths-' + Math.floor(Math.random() * 100000);
+        const dialog = $(`<div class="folders-dialog"><div class="folders-form-row"><label for="folders-subflow-name">Name</label><input id="folders-subflow-name" type="text" value="${esc(getLabel(subflow))}"></div><div class="folders-form-row"><label for="folders-subflow-path">Directory</label><input id="folders-subflow-path" type="text" list="${datalistId}" value="${esc(getItemPath('subflow', subflow) || '')}"><datalist id="${datalistId}">${paths.map(path => `<option value="${esc(path)}"></option>`).join('')}</datalist></div><div class="folders-form-row"><label for="folders-subflow-info">Description</label><textarea id="folders-subflow-info">${esc(getInfo(subflow))}</textarea></div></div>`).appendTo('body');
+        dialog.dialog({ modal: true, width: 560, title: 'Edit subflow: ' + getLabel(subflow), buttons: [ { text: 'Cancel', click: function() { $(this).dialog('destroy').remove(); } }, { text: 'Done', class: 'primary', click: function() { const newName = String($('#folders-subflow-name', dialog).val() || '').trim(); const newPath = normalisePath($('#folders-subflow-path', dialog).val()); const newInfo = String($('#folders-subflow-info', dialog).val() || ''); if (newName) { subflow.name = newName; subflow.label = newName; } subflow.info = newInfo; writeSubflowMeta(subflow, { path: newPath }); markDirty(subflow); $(this).dialog('destroy').remove(); render(); notify('Subflow updated. Deploy to save.'); } } ], open: function() { $('#folders-subflow-name', dialog).trigger('focus').trigger('select'); }, close: function() { dialog.remove(); } });
+    }
+
+    function selectedBasePath() {
+        if (selected && selected.type === 'folder') { return selected.path || ''; }
+        if (selected && selected.type === 'flow') { const flow = findWorkspaceById(selected.id); return getPath(flow); }
+        if (selected && selected.type === 'subflow') { const subflow = findSubflowById(selected.id); return getItemPath('subflow', subflow); }
+        const active = findWorkspaceById(getCurrentWorkspaceId());
+        return getPath(active);
+    }
+
+    function selectedSubflowBasePath() {
+        if (selected && selected.type === 'subflow-folder') { return selected.path || ''; }
+        if (selected && selected.type === 'subflow') { return getItemPath('subflow', findSubflowById(selected.id)); }
+        return '';
+    }
+
+    function createFolderHere(baseOverride) {
+        const base = normalisePath(baseOverride !== undefined ? baseOverride : selectedBasePath());
+        let name = 'New folder';
+        let path = base ? base + '/' + name : name;
+        let index = 2;
+        while (folderExists(path)) { name = 'New folder ' + index++; path = base ? base + '/' + name : name; }
+        addEmptyFolder(path);
+        markDirty();
+        collapsed.delete(base);
+        collapsed.delete(path);
+        selected = { type: 'folder', path: path };
+        selectedKeys = new Set([itemKey('folder', path)]);
+        editingFolderPath = path;
+        editingFolderOriginal = null;
+        render();
+    }
+
+    function createSubflowFolderHere(baseOverride) {
+        const base = normalisePath(baseOverride !== undefined ? baseOverride : selectedBasePath());
+        let name = 'New folder';
+        let path = base ? base + '/' + name : name;
+        let index = 2;
+        while (folderExistsForKind('subflow', path)) { name = 'New folder ' + index++; path = base ? base + '/' + name : name; }
+        ensureFolderRecordForKind('subflow', path);
+        scheduleConfigSave();
+        markDirty();
+        collapsed.delete('subflow-folder:' + base);
+        collapsed.delete('subflow-folder:' + path);
+        selected = { type: 'subflow-folder', path: path };
+        selectedKeys = new Set([itemKey('subflow-folder', path)]);
+        editingFolderPath = 'subflow:' + path;
+        editingFolderOriginal = null;
+        render();
+    }
+
+    function uniqueFlowLabel() {
+        const labels = getWorkspaces().map(getLabel);
+        let index = 1;
+        let name = 'Flow ' + index;
+        while (labels.indexOf(name) !== -1) { index++; name = 'Flow ' + index; }
+        return name;
+    }
+
+    function uniqueSubflowLabel() {
+        const labels = getSubflows(false).map(getLabel);
+        let index = 1;
+        let name = 'Subflow ' + index;
+        while (labels.indexOf(name) !== -1) { index++; name = 'Subflow ' + index; }
+        return name;
+    }
+
+    function makeNodeRedId() {
+        try { if (RED.nodes && typeof RED.nodes.id === 'function') { return RED.nodes.id(); } } catch (err) {}
+        return (Math.random().toString(16).slice(2) + Date.now().toString(16)).slice(0, 16);
+    }
+
+    function finishNativeFlowCreate(base, beforeIds, attempt) {
+        attempt = attempt || 0;
+        let flow = null;
+        const activeId = getCurrentWorkspaceId();
+        if (activeId && !beforeIds.has(activeId)) { flow = findWorkspaceById(activeId); }
+        if (!flow) {
+            const after = getWorkspaces();
+            flow = after.find(ws => !beforeIds.has(ws.id)) || findWorkspaceById(activeId);
+        }
+        if (!flow || !flow.id) {
+            if (attempt < 30) { setTimeout(function(){ finishNativeFlowCreate(base, beforeIds, attempt + 1); }, 100); return; }
+            notify('Flow was added, but Folders could not initialise it yet. Refresh the browser if it does not open.', 'warning');
+            setTimeout(render, 200);
+            return;
+        }
+        writeMetaEverywhere(flow.id, { path: base });
+        selected = { type: 'flow', id: flow.id };
+        selectedKeys = new Set([itemKey('flow', flow.id)]);
+        lastRangeAnchor = itemKey('flow', flow.id);
+        markDirty(flow);
+        try { if (RED.events && typeof RED.events.emit === 'function') { RED.events.emit('workspace:add', flow); RED.events.emit('workspace:change', flow); RED.events.emit('flows:change', flow); } } catch (err) {}
+        try { if (RED.workspaces && typeof RED.workspaces.refresh === 'function') { RED.workspaces.refresh(); } } catch (err) {}
+        setTimeout(function(){ showWorkspace(flow.id); render(); }, 20);
+        setTimeout(function(){ showWorkspace(flow.id); render(); }, 200);
+        notify('Flow created. Deploy to save.');
+    }
+
+    function createFlowHere(baseOverride) {
+        const base = normalisePath(baseOverride !== undefined ? baseOverride : selectedBasePath());
+        const beforeIds = new Set(getWorkspaces().map(ws => ws.id));
+        try {
+            if (RED.actions && typeof RED.actions.invoke === 'function') {
+                RED.actions.invoke('core:add-flow');
+                setTimeout(function(){ finishNativeFlowCreate(base, beforeIds, 0); }, 60);
+                return;
+            }
+        } catch (err) { console.warn('Folders native core:add-flow failed', err); }
+
+        const flow = { id: makeNodeRedId(), type: 'tab', label: uniqueFlowLabel(), info: '', env: [], disabled: false, locked: false, hideable: true };
+        writeMeta(flow, { path: base });
+        let added = false;
+        try { if (RED.nodes && typeof RED.nodes.addWorkspace === 'function') { RED.nodes.addWorkspace(flow); added = true; } } catch (err) { console.warn('Folders addWorkspace failed', err); }
+        try { if (RED.nodes && typeof RED.nodes.add === 'function') { RED.nodes.add(flow); added = true; } } catch (err) {}
+        try { if (RED.workspaces && typeof RED.workspaces.add === 'function') { RED.workspaces.add(flow); added = true; } } catch (err) {}
+        if (!added) { notify('Could not create a new flow in this Node-RED version.', 'error'); return; }
+        selected = { type: 'flow', id: flow.id };
+        selectedKeys = new Set([itemKey('flow', flow.id)]);
+        lastRangeAnchor = itemKey('flow', flow.id);
+        markDirty(flow);
+        try { if (RED.events && typeof RED.events.emit === 'function') { RED.events.emit('workspace:add', flow); RED.events.emit('workspace:change', flow); RED.events.emit('flows:change', flow); } } catch (err) {}
+        setTimeout(function(){ showWorkspace(flow.id); render(); }, 80);
+        setTimeout(function(){ showWorkspace(flow.id); render(); }, 400);
+        notify('Flow created. Deploy to save.');
+    }
+    /*
+    function finishNativeSubflowCreate(base, beforeIds, attempt) {
+        Subflow creation is hidden for now. Node-RED initialises subflow tabs
+        differently from normal flow tabs, so we will revisit this carefully.
+    }
+
+    function createSubflowHere(baseOverride) {
+        Subflow creation is hidden for now.
+    }
+    */
+
+    function removeFlowFromEditor(flow) {
+        if (!flow) { return false; }
+        try {
+            if (RED.workspaces && typeof RED.workspaces.delete === 'function') {
+                RED.workspaces.delete(flow);
+                return true;
+            }
+        } catch (err) { console.warn('Folders native delete failed', err); }
+        let removed = false;
+        try { if (RED.workspaces && typeof RED.workspaces.remove === 'function') { RED.workspaces.remove(flow); removed = true; } } catch (err) { try { RED.workspaces.remove(flow.id); removed = true; } catch (err2) {} }
+        try { if (RED.nodes && typeof RED.nodes.removeWorkspace === 'function') { RED.nodes.removeWorkspace(flow.id); removed = true; } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.remove === 'function') { RED.nodes.remove(flow.id); removed = true; } } catch (err) { try { RED.nodes.remove(flow); removed = true; } catch (err2) {} }
+        return removed;
+    }
+
+    function removeSubflowFromEditor(subflow) {
+        if (!subflow) { return false; }
+        let removed = false;
+        try { if (RED.nodes && typeof RED.nodes.removeSubflow === 'function') { RED.nodes.removeSubflow(subflow.id); removed = true; } } catch (err) {}
+        try { if (RED.nodes && typeof RED.nodes.remove === 'function') { RED.nodes.remove(subflow.id); removed = true; } } catch (err) { try { RED.nodes.remove(subflow); removed = true; } catch (err2) {} }
+        try { if (RED.events && typeof RED.events.emit === 'function') { RED.events.emit('nodes:remove', subflow); RED.events.emit('flows:change', subflow); } } catch (err) {}
+        return removed;
+    }
+
+    function flowsInFolder(path) {
+        const clean = normalisePath(path);
+        return getWorkspaces().filter(flow => {
+            const p = getPath(flow);
+            return p === clean || p.indexOf(clean + '/') === 0;
+        });
+    }
+
+    function selectedFlowObjects() {
+        const folderPaths = selectedFolderPaths();
+        const flows = [];
+        const seen = new Set();
+        folderPaths.forEach(function(path) {
+            flowsInFolder(path).forEach(function(flow) { if (flow && flow.id && !seen.has(flow.id)) { seen.add(flow.id); flows.push(flow); } });
+        });
+        Array.from(selectedKeys).forEach(function(key) {
+            if (key.indexOf('flow:') !== 0) { return; }
+            const flow = findWorkspaceById(key.slice(5));
+            if (!flow || !flow.id || seen.has(flow.id) || flowIsInsideAnySelectedFolder(flow, folderPaths)) { return; }
+            seen.add(flow.id);
+            flows.push(flow);
+        });
+        Array.from(selectedKeys).forEach(function(key) {
+            if (key.indexOf('subflow:') !== 0) { return; }
+            if (selected && selected.type === 'subflow') { return; }
+            const subflow = findSubflowById(key.slice(8));
+            const seenKey = 'subflow:' + key.slice(8);
+            if (!subflow || seen.has(seenKey)) { return; }
+            seen.add(seenKey);
+            flows.push(subflow);
+        });
+        if (selected && selected.type === 'flow') {
+            const flow = findWorkspaceById(selected.id);
+            if (flow && flow.id && !seen.has(flow.id) && !flowIsInsideAnySelectedFolder(flow, folderPaths)) { flows.push(flow); }
+        }
+        return flows;
+    }
+
+    function executeDeleteSelection() {
+        const folders = selectedFolderPaths();
+        const flows = selectedFlowObjects();
+        const workspaceFlows = flows.filter(function(flow) { return flow && flow.type !== 'subflow' && flow._foldersKind !== 'subflow'; });
+        const workspaceCount = getWorkspaces().length;
+        if (workspaceFlows.length && workspaceFlows.length >= workspaceCount) {
+            notify('Node-RED must keep at least one flow tab. Create another flow before deleting the last one.', 'warning');
+            return;
+        }
+        folders.forEach(function(path) { removeEmptyFolder(path); });
+        flows.forEach(function(flow) {
+            if (!flow || !flow.id) { return; }
+            if (flow.type === 'subflow' || flow._foldersKind === 'subflow') {
+                if (folderConfig.subflows) { delete folderConfig.subflows[flow.id]; }
+                removeSubflowFromEditor(flow);
+            } else {
+                if (folderConfig.flows) { delete folderConfig.flows[flow.id]; }
+                removeFlowFromEditor(flow);
+            }
+        });
+        scheduleConfigSave();
+        selected = null;
+        selectedKeys = new Set();
+        markDirty();
+        render();
+        notify('Deleted. Deploy to save.');
+    }
+
+    function openDeleteDialog() {
+        if (!selected || (selected.type !== 'flow' && selected.type !== 'folder')) { return; }
+        const folders = selectedFolderPaths();
+        const selectedFlows = selectedFlowObjects();
+        const workspaceFlows = selectedFlows.filter(function(flow) { return flow && flow.type !== 'subflow' && flow._foldersKind !== 'subflow'; });
+        if (workspaceFlows.length && workspaceFlows.length >= getWorkspaces().length) {
+            notify('Node-RED must keep at least one flow tab. Create another flow before deleting the last one.', 'warning');
+            return;
+        }
+        const nodeCount = selectedFlows.reduce((sum, flow) => sum + countNodes(flow), 0);
+        if (nodeCount === 0) {
+            executeDeleteSelection();
+            return;
+        }
+        const isMass = folders.length + selectedFlows.length > 1;
+        const title = isMass ? 'Delete items' : (folders.length ? 'Delete folder' : (selectedFlows[0] && selectedFlows[0].type === 'subflow' ? 'Delete subflow' : 'Delete flow'));
+        const text = isMass ? 'Are you sure you want to delete the selected items?' : folders.length ? `Are you sure you want to delete "${esc(folders[0])}"?` : `Are you sure you want to delete "${esc(getLabel(selectedFlows[0]))}"?`;
+        const detailItems = [];
+        if (isMass) {
+            if (folders.length) { detailItems.push(`${folders.length} folder${folders.length === 1 ? '' : 's'}`); }
+            if (selectedFlows.length) { detailItems.push(`${selectedFlows.length} flow${selectedFlows.length === 1 ? '' : 's'}`); }
+        } else if (folders.length) {
+            detailItems.push(`${folders.length} folder${folders.length === 1 ? '' : 's'}`);
+        }
+        detailItems.push(`${nodeCount} node${nodeCount === 1 ? '' : 's'}`);
+        const details = '<ul class="folders-confirm-list">' + detailItems.map(item => '<li>' + esc(item) + '</li>').join('') + '</ul>';
+        const dialog = $(`<div class="folders-dialog folders-delete-dialog"><p><i class="fa fa-trash folders-delete-confirm-icon"></i> ${text}</p>${details}</div>`).appendTo('body');
+        dialog.dialog({ modal: true, width: 520, title: title, buttons: [
+            { text: 'Cancel', click: function() { $(this).dialog('destroy').remove(); } },
+            { text: 'Delete', class: 'folders-delete-button', click: function() { executeDeleteSelection(); $(this).dialog('destroy').remove(); } }
+        ], close: function() { dialog.remove(); } });
+    }
+
+    function selectedFolderPaths() {
+        const paths = selectedFolderPathsFromKeys(Array.from(selectedKeys));
+        if (selected && selected.type === 'folder' && paths.indexOf(selected.path) === -1) { paths.push(selected.path); }
+        return compactFolderSelection(paths);
+    }
+
+    function selectedSubflowFolderPaths() {
+        const paths = selectedSubflowFolderPathsFromKeys(Array.from(selectedKeys));
+        if (selected && selected.type === 'subflow-folder' && paths.indexOf(selected.path) === -1) { paths.push(selected.path); }
+        return compactFolderSelection(paths);
+    }
+
+    function selectedFlowIds() {
+        const ids = Array.from(selectedKeys).filter(key => key.indexOf('flow:') === 0).map(key => key.slice(5)).filter(Boolean);
+        if (selected && selected.type === 'flow' && ids.indexOf(selected.id) === -1) { ids.push(selected.id); }
+        return Array.from(new Set(ids));
+    }
+
+    function selectedSubflowIds() {
+        const ids = Array.from(selectedKeys).filter(key => key.indexOf('subflow:') === 0).map(key => key.slice(8)).filter(Boolean);
+        if (selected && selected.type === 'subflow' && ids.indexOf(selected.id) === -1) { ids.push(selected.id); }
+        return Array.from(new Set(ids));
+    }
+
+    function openFolderStyleDialog() {
+        const folders = selectedFolderPaths();
+        const flowIds = selectedFlowIds();
+        const subflowFolders = selectedSubflowFolderPaths();
+        const subflowIds = selectedSubflowIds();
+        if (!folders.length && !flowIds.length && !subflowFolders.length && !subflowIds.length) { return; }
+        const firstFolder = folders[0];
+        const firstFlowId = flowIds[0];
+        const firstSubflowFolder = subflowFolders[0];
+        const firstSubflowId = subflowIds[0];
+        const firstMeta = firstFolder ? getFolderMeta(firstFolder) : firstFlowId ? getFlowMeta(firstFlowId) : firstSubflowFolder ? getFolderMetaForKind('subflow', firstSubflowFolder) : getItemMeta('subflow', firstSubflowId);
+        const selectedKindCount = [folders.length || flowIds.length, subflowFolders.length || subflowIds.length].filter(Boolean).length;
+        const title = selectedKindCount > 1 || folders.length + flowIds.length + subflowFolders.length + subflowIds.length > 1 ? 'Style selected items' : firstFolder ? 'Folder style: ' + firstFolder : firstFlowId ? 'Flow style: ' + getLabel(findWorkspaceById(firstFlowId)) : firstSubflowFolder ? 'Subflow folder style: ' + firstSubflowFolder : 'Subflow style: ' + getLabel(findSubflowById(firstSubflowId));
+        const colors = ['', '#4c566a', '#5e81ac', '#81a1c1', '#88c0d0', '#8fbcbb', '#a3be8c', '#b5bd68', '#ebcb8b', '#d08770', '#bf616a', '#b48ead'];
+        const folderIcons = ['fa fa-folder', 'fa fa-folder-o', 'fa fa-folder-open-o', 'fa fa-archive', 'fa fa-cubes', 'fa fa-sitemap', 'fa fa-home', 'fa fa-building-o', 'fa fa-industry', 'fa fa-server', 'fa fa-database', 'fa fa-cog', 'fa fa-cloud', 'fa fa-globe', 'fa fa-shield', 'fa fa-lock', 'fa fa-flask', 'fa fa-wrench', 'fa fa-plug', 'fa fa-bolt', 'fa fa-wifi'];
+        const flowIcons = ['red-ui-icons red-ui-icons-flow', 'fa fa-file-o', 'fa fa-code', 'fa fa-random', 'fa fa-microchip', 'fa fa-dashboard', 'fa fa-thermometer-half', 'fa fa-snowflake-o', 'fa fa-fire', 'fa fa-exchange', 'fa fa-line-chart', 'fa fa-cog', 'fa fa-terminal', 'fa fa-code-fork', 'fa fa-plug', 'fa fa-bolt', 'fa fa-clock-o', 'fa fa-calendar', 'fa fa-envelope-o', 'fa fa-cloud', 'fa fa-globe', 'fa fa-link', 'fa fa-key', 'fa fa-shield', 'fa fa-database', 'fa fa-hdd-o'];
+        const subflowIcons = ['red-ui-icons red-ui-icons-flow', 'fa fa-puzzle-piece', 'fa fa-code-fork', 'fa fa-object-group', 'fa fa-cubes', 'fa fa-sitemap', 'fa fa-code', 'fa fa-random', 'fa fa-cog', 'fa fa-plug', 'fa fa-share-alt', 'fa fa-retweet'];
+        const hasFolders = folders.length || subflowFolders.length;
+        const hasItems = flowIds.length || subflowIds.length;
+        const icons = hasFolders && !hasItems ? folderIcons : hasItems && !hasFolders ? flowIcons.concat(subflowIcons.filter(icon => flowIcons.indexOf(icon) === -1)) : folderIcons.concat(flowIcons.filter(icon => folderIcons.indexOf(icon) === -1)).concat(subflowIcons.filter(icon => folderIcons.indexOf(icon) === -1 && flowIcons.indexOf(icon) === -1));
+        const dialog = $('<div class="folders-dialog folders-style-dialog"></div>').appendTo('body');
+        const colorRow = $('<div class="folders-form-row"><label>Colour</label></div>').appendTo(dialog);
+        const colorGrid = $('<div class="folders-style-grid"></div>').appendTo(colorRow);
+        colors.forEach(function(color) {
+            const c = $('<div>', { class: 'folders-color-choice' + ((firstMeta.color || '') === color ? ' selected' : ''), title: color || 'Default' }).appendTo(colorGrid);
+            c.css('background', color || 'linear-gradient(45deg,#fff 0,#fff 45%,#ccc 45%,#ccc 55%,#fff 55%,#fff 100%)');
+            c.on('click', function(){ $('.folders-color-choice', dialog).removeClass('selected'); c.addClass('selected'); $('#folders-custom-color', dialog).val(color); });
+        });
+        $('<input id="folders-custom-color" type="text" placeholder="#HEX">').val(firstMeta.color || '').appendTo(colorRow);
+        const iconRow = $('<div class="folders-form-row"><div class="folders-style-section-title"><label>Icon</label><a class="red-ui-button red-ui-button-small folders-icon-help-link" href="https://fontawesome.com/icons" target="_blank" title="Find more Font Awesome icons"><i class="fa fa-external-link"></i></a></div></div>').appendTo(dialog);
+        const iconGrid = $('<div class="folders-style-grid"></div>').appendTo(iconRow);
+        icons.forEach(function(icon) {
+            const selectedIcon = (firstMeta.icon || (firstFolder ? DEFAULT_FOLDER_ICON : DEFAULT_FLOW_ICON)) === icon;
+            const i = $('<div>', { class: 'folders-icon-choice' + (selectedIcon ? ' selected' : ''), title: icon }).html('<i class="' + esc(icon) + '"></i>').appendTo(iconGrid);
+            i.on('click', function(){ $('.folders-icon-choice', dialog).removeClass('selected'); i.addClass('selected'); $('#folders-custom-icon', dialog).val(icon); });
+        });
+        $('<input id="folders-custom-icon" type="text" placeholder="fa fa-folder or red-ui-icons red-ui-icons-flow">').val(firstMeta.icon || (hasFolders ? DEFAULT_FOLDER_ICON : DEFAULT_FLOW_ICON)).appendTo(iconRow);
+        dialog.dialog({ modal: true, width: 430, title: title, buttons: [
+            { text: 'Cancel', click: function() { $(this).dialog('destroy').remove(); } },
+            { text: 'Apply', class: 'primary', click: function() {
+                const color = String($('#folders-custom-color', dialog).val() || '').trim();
+                const icon = String($('#folders-custom-icon', dialog).val() || '').trim();
+                folders.forEach(function(path) { ensureFolderRecord(path, { color: color, icon: icon || DEFAULT_FOLDER_ICON }); });
+                subflowFolders.forEach(function(path) { ensureFolderRecordForKind('subflow', path, { color: color, icon: icon || DEFAULT_FOLDER_ICON }); });
+                flowIds.forEach(function(id) {
+                    const flow = findWorkspaceById(id);
+                    if (!folderConfig.flows[id]) { folderConfig.flows[id] = { id: id, name: flow ? getLabel(flow) : id, path: storedPath(flow ? getPath(flow) : ''), createdAt: nowIso(), updatedAt: nowIso() }; }
+                    folderConfig.flows[id].color = color;
+                    folderConfig.flows[id].icon = icon || DEFAULT_FLOW_ICON;
+                    folderConfig.flows[id].updatedAt = nowIso();
+                });
+                subflowIds.forEach(function(id) {
+                    const subflow = findSubflowById(id);
+                    if (!folderConfig.subflows[id]) { folderConfig.subflows[id] = { id: id, name: subflow ? getLabel(subflow) : id, path: storedPath(subflow ? getItemPath('subflow', subflow) : ''), createdAt: nowIso(), updatedAt: nowIso() }; }
+                    folderConfig.subflows[id].color = color;
+                    folderConfig.subflows[id].icon = icon || DEFAULT_FLOW_ICON;
+                    folderConfig.subflows[id].updatedAt = nowIso();
+                });
+                saveConfigNow();
+                $(this).dialog('destroy').remove();
+                render();
+                forceInfoPanelUpdate();
+            } }
+        ], close: function(){ dialog.remove(); } });
+    }
+
+    function updateFooterButtons() {
+        const hasDeleteSelection = !!selected && (selected.type === 'flow' || selected.type === 'folder');
+        const hasStyleSelection = !!selected && (selected.type === 'flow' || selected.type === 'folder' || selected.type === 'subflow' || selected.type === 'subflow-folder');
+        if (footerDeleteButton) { footerDeleteButton.toggle(hasDeleteSelection).prop('disabled', !hasDeleteSelection).toggleClass('disabled', !hasDeleteSelection); }
+        if (footerFolderStyleButton) { footerFolderStyleButton.toggle(hasStyleSelection).prop('disabled', !hasStyleSelection).toggleClass('disabled', !hasStyleSelection); }
+    }
+
+    function getFilterLabel() {
+        const labels = { all: 'All', flows: 'Flows', subflows: 'Subflows', shown: 'Shown', hidden: 'Hidden', enabled: 'Enabled', disabled: 'Disabled', locked: 'Locked', unlocked: 'Unlocked' };
+        return labels[filterMode] || 'All';
+    }
+
+    function updateHeaderLabels() {
+        if (headerFilterButton) { headerFilterButton.find('span').text(getFilterLabel()); }
+        if (headerSortButton) {
+            const labels = { name: 'Name', created: 'Created', updated: 'Updated', type: 'Type' };
+            headerSortButton.find('span').text(labels[sortMode] || 'Name');
+        }
+        if (headerSortDirButton) { headerSortDirButton.html(sortDir === 'desc' ? '<i class="fa fa-arrow-down"></i>' : '<i class="fa fa-arrow-up"></i>'); headerSortDirButton.attr('title', sortDir === 'desc' ? 'Descending' : 'Ascending'); }
+    }
+
+    function closeFoldersMenus() { $('.folders-menu').remove(); }
+
+    function contextKey(context) {
+        if (!context) { return ''; }
+        if (context.type === 'folder') { return itemKey('folder', context.path); }
+        if (context.type === 'flow') { return itemKey('flow', context.id); }
+        if (context.type === 'subflow') { return itemKey('subflow', context.id); }
+        return '';
+    }
+
+    function targetPathFromContext(context) {
+        if (!context) { return ''; }
+        if (context.type === 'folder') { return normalisePath(context.path); }
+        if (context.type === 'flow') { return normalisePath(context.path); }
+        if (context.type === 'subflow') { return normalisePath(context.path); }
+        return normalisePath(context.path || '');
+    }
+
+    function forceSelectContext(context) {
+        const key = contextKey(context);
+        if (!key) { return; }
+        selectedKeys = new Set([key]);
+        setSelectedFromKey(key);
+        lastRangeAnchor = key;
+        updateFooterButtons();
+        forceInfoPanelUpdate();
+        render();
+    }
+
+    function openContextMenu(event, context) {
+        closeFoldersMenus();
+        forceSelectContext(context);
+        const menu = $('<div>', { class: 'folders-menu folders-context-menu' }).appendTo('body');
+        function add(label, icon, action, enabled, options) {
+            if (enabled === false) { return; }
+            options = options || {};
+            $('<a>', { href: '#', class: options.danger ? 'folders-danger-action' : '' }).html('<span class="folders-menu-check">' + (icon ? '<i class="' + esc(icon) + '"></i>' : '') + '</span><span>' + esc(label) + '</span>').appendTo(menu).on('click', function(e) {
+                e.preventDefault();
+                closeFoldersMenus();
+                action();
+            });
+        }
+        function addNewSubmenu(enabled) {
+            if (!enabled) { return; }
+            const wrap = $('<div>', { class: 'folders-submenu-wrap' }).appendTo(menu);
+            $('<a>', { href: '#', class: 'folders-submenu-toggle' }).html('<span class="folders-menu-check">+</span><span>New</span>').appendTo(wrap).on('click', function(e) { e.preventDefault(); });
+            const sub = $('<div>', { class: 'folders-menu folders-submenu' }).appendTo(wrap);
+            [
+                ['Folder', '<i class="fa fa-folder"></i>', function() { createFolderHere(basePath); }],
+                ['Flow', '<i class="' + esc(DEFAULT_FLOW_ICON) + ' folders-footer-flow-icon"></i>', function() { createFlowHere(basePath); }]
+            ].forEach(function(item) {
+                $('<a>', { href: '#' }).html('<span class="folders-menu-check">' + item[1] + '</span><span>' + esc(item[0]) + '</span>').appendTo(sub).on('click', function(e) {
+                    e.preventDefault();
+                    closeFoldersMenus();
+                    item[2]();
+                });
+            });
+        }
+        const basePath = targetPathFromContext(context);
+        addNewSubmenu(context.type === 'workspace' || context.type === 'folder' || context.type === 'flow' || context.type === 'subflow');
+        add('Rename', 'fa fa-pencil', function() {
+            if (context.type === 'folder') { editingFolderPath = basePath; editingFolderOriginal = basePath; }
+            if (context.type === 'flow') { editingItemKey = itemKey('flow', context.id); }
+            if (context.type === 'subflow') { editingItemKey = itemKey('subflow', context.id); }
+            render();
+        }, context.type === 'folder' || context.type === 'flow' || context.type === 'subflow');
+        add('Icon and colour', 'fa fa-tint', function() { openFolderStyleDialog(); }, context.type === 'folder' || context.type === 'flow' || context.type === 'subflow');
+        add('Delete', 'fa fa-trash', function() {
+            openDeleteDialog();
+        }, context.type === 'folder' || context.type === 'flow', { danger: true });
+        menu.css({ left: event.pageX, top: event.pageY });
+    }
+
+    function openHeaderMenu(anchor, mode) {
+        const existing = $('.folders-header-menu[data-mode="' + mode + '"]');
+        if (existing.length) {
+            closeFoldersMenus();
+            return;
+        }
+        closeFoldersMenus();
+        const options = mode === 'sort' ? [ ['name','Name'], ['created','Created'], ['updated','Updated'], ['type','Type'] ] : [ ['all','All'], ['flows','Flows'], ['subflows','Subflows'], ['shown','Shown'], ['hidden','Hidden'], ['enabled','Enabled'], ['disabled','Disabled'], ['unlocked','Unlocked'], ['locked','Locked'] ];
+        const current = mode === 'sort' ? sortMode : filterMode;
+        const menu = $('<div>', { class: 'folders-menu folders-header-menu' }).attr('data-mode', mode).appendTo('body');
+        options.forEach(function(item) {
+            const row = $('<a>', { href: '#', class: item[0] === current ? 'selected' : '' }).html('<span class="folders-menu-check">' + (item[0] === current ? '<i class="fa fa-check folders-menu-check-icon"></i>' : '') + '</span><span>' + esc(item[1]) + '</span>').appendTo(menu);
+            row.on('click', function(e) {
+                e.preventDefault();
+                if (mode === 'sort') { sortMode = item[0]; }
+                else { filterMode = item[0]; }
+                saveLocalState();
+                updateHeaderLabels();
+                closeFoldersMenus();
+                render();
+            });
+        });
+        const pos = anchor.offset();
+        menu.css({ left: pos.left, top: pos.top + anchor.outerHeight() + 2 });
+    }
+
+    function setFlowExplorerSidebarIcon(icon) {
+        try {
+            const target = $(icon);
+            if (!target || !target.length) { return; }
+            target.attr('class', 'red-ui-sidebar-tab-icon fa fa-folder folders-explorer-tab-icon');
+            target.removeAttr('style');
+            target.css({ 'mask-image': 'none', '-webkit-mask-image': 'none' });
+            const button = target.closest('button');
+            if (button && button.length && (button.hasClass('selected') || button.hasClass('active') || button.hasClass('red-ui-sidebar-tab-selected'))) {
+                target.css('color', '#fff');
+            } else {
+                target.css('color', '');
+            }
+        } catch (err) {}
+    }
+
+    function fixSidebarIcon() {
+        try {
+            setFlowExplorerSidebarIcon($('button[data-tab-id="' + SIDEBAR_ID + '"] i').first());
+            $('.red-ui-sidebar-banner').each(function() {
+                const banner = $(this);
+                if ($.trim(banner.find('.red-ui-sidebar-banner-label').text()) !== 'EXPLORER') { return; }
+                const holder = banner.find('.red-ui-sidebar-banner-icon').first();
+                holder.addClass('folders-sidebar-banner-icon');
+                let icon = holder.find('i').first();
+                if (!icon.length) {
+                    icon = $('<i>').appendTo(holder.empty());
+                }
+                setFlowExplorerSidebarIcon(icon);
+            });
+        } catch (err) {}
+    }
+
+    function initEvents() {
+        try {
+            if (RED.events && typeof RED.events.on === 'function') {
+                ['flows:loaded', 'flows:change', 'flows:add', 'flows:remove', 'workspace:change', 'workspace:add', 'workspace:remove', 'nodes:add', 'nodes:remove', 'nodes:change', 'deploy'].forEach(eventName => RED.events.on(eventName, function() {
+                    if (eventName === 'flows:loaded') { setTimeout(loadConfig, 50); return; }
+                    if (eventName.indexOf('workspace:') === 0) { syncSelectedToWorkspace(); }
+                    setTimeout(function() { syncStoreFromWorkspaces(false); render(); }, 50);
+                }));
+            }
+        } catch (err) {}
+    }
+
+    function init() {
+        installStyles();
+        if (!window.RED || !RED.sidebar) { setTimeout(init, 250); return; }
+        if (RED.sidebar.containsTab && RED.sidebar.containsTab(SIDEBAR_ID)) { return; }
+        loadLocalState();
+        root = $('<div>', { class: 'folders-explorer' });
+        outline = $('<div>', { class: 'red-ui-info-outline' }).appendTo(root);
+        const toolbar = $('<div>', { class: 'red-ui-info-toolbar red-ui-palette-search' }).appendTo(outline);
+        const searchBox = $('<div class="red-ui-searchBox-container red-ui-searchBox-has-options"><i class="fa fa-search"></i><form class="red-ui-searchBox-form"><input type="text" data-i18n="[placeholder]menu.label.search" class="red-ui-searchBox-input" placeholder="Search flows"></form><a class="red-ui-searchBox-clear" href="#" aria-label="clear all"><i class="fa fa-times"></i></a><span class="red-ui-searchBox-resultCount hide"></span></div>').appendTo(toolbar);
+        const form = searchBox.find('form');
+        searchInput = searchBox.find('input');
+        const clear = searchBox.find('.red-ui-searchBox-clear');
+        const tools = $('<div>', { class: 'red-ui-sidebar-header folders-header' }).appendTo(outline);
+        const filterGroup = $('<span>', { class: 'button-group' }).appendTo(tools);
+        headerFilterButton = $('<a>', { href: '#', class: 'red-ui-button red-ui-button-small folders-header-control folders-filter-button', title: 'Filter flows' }).html('<i class="fa fa-filter"></i> <span></span> <i class="fa fa-caret-down"></i>').appendTo(filterGroup);
+        const sortGroup = $('<span>', { class: 'button-group' }).appendTo(tools);
+        headerSortButton = $('<a>', { href: '#', class: 'red-ui-button red-ui-button-small folders-header-control folders-sort-button', title: 'Sort workspace' }).html('<i class="fa fa-sort"></i> <span></span> <i class="fa fa-caret-down"></i>').appendTo(sortGroup);
+        const dirGroup = $('<span>', { class: 'button-group folders-dir-group' }).appendTo(tools);
+        headerSortDirButton = $('<a>', { href: '#', class: 'red-ui-button red-ui-button-small folders-header-control folders-sort-dir', title: 'Reverse sort' }).html(sortDir === 'desc' ? '<i class="fa fa-sort-alpha-desc"></i>' : '<i class="fa fa-sort-alpha-asc"></i>').appendTo(dirGroup);
+        sortDirButton = headerSortDirButton;
+        updateHeaderLabels();
+        const treeWrap = $('<div>', { class: 'red-ui-treeList', tabindex: 0 }).appendTo(outline);
+        const treeContainer = $('<div>', { class: 'red-ui-treeList-container' }).appendTo(treeWrap);
+        const editList = $('<div>', { class: 'red-ui-editableList' }).appendTo(treeContainer);
+        const borderList = $('<div>', { class: 'red-ui-editableList-border red-ui-editableList-container' }).appendTo(editList);
+        tree = $('<ol>', { class: 'red-ui-treeList-list red-ui-editableList-list' }).appendTo(borderList);
+        bindDropTarget(treeWrap, '');
+        treeWrap.on('click', function(e) {
+            if ($(e.target).closest('.red-ui-treeList-label,button,input,a,.folders-menu').length) { return; }
+            selected = null;
+            selectedKeys = new Set();
+            lastRangeAnchor = null;
+            updateFooterButtons();
+            updateInfoPanel();
+            render();
+        });
+        treeWrap.on('contextmenu', function(e) {
+            if ($(e.target).closest('.red-ui-treeList-label,button,input,a,.folders-menu').length) { return; }
+            e.preventDefault();
+            selected = null;
+            selectedKeys = new Set();
+            lastRangeAnchor = null;
+            updateFooterButtons();
+            openContextMenu(e, { type: 'workspace', path: '' });
+        });
+        form.on('submit', function(e) { e.preventDefault(); });
+        searchInput.on('input', function() { searchBox.toggleClass('has-value', !!searchInput.val()); render(); });
+        clear.on('click', function(e) { e.preventDefault(); searchInput.val(''); searchBox.removeClass('has-value'); render(); searchInput.trigger('focus'); });
+        headerFilterButton.on('click', function(e){ e.preventDefault(); openHeaderMenu(headerFilterButton, 'filter'); });
+        headerSortButton.on('click', function(e){ e.preventDefault(); openHeaderMenu(headerSortButton, 'sort'); });
+        sortDirButton.on('click', function(e){ e.preventDefault(); sortDir = sortDir === 'asc' ? 'desc' : 'asc'; saveLocalState(); updateHeaderLabels(); render(); });
+        $(document).on('mousedown.folders-menu', function(e){ if (!$(e.target).closest('.folders-menu,.folders-header').length) { closeFoldersMenus(); } });
+        $(document).on('keydown.folders-delete', function(e) {
+            const tag = String(e.target && e.target.tagName || '').toLowerCase();
+            if (tag === 'input' || tag === 'textarea' || tag === 'select' || $(e.target).closest('.ui-dialog').length) { return; }
+            if (e.key === 'Delete' || e.key === 'Backspace' || e.which === 46 || e.which === 8) {
+                if (selected && (selected.type === 'folder' || selected.type === 'flow')) {
+                    e.preventDefault();
+                    openDeleteDialog();
+                }
+            }
+        });
+        const footer = $('<div>', { class: 'folders-footer' }).appendTo(root);
+        const footerLeft = $('<div>', { class: 'folders-footer-left' }).appendTo(footer);
+        $('<button>', { type: 'button', class: 'red-ui-button red-ui-button-small', title: 'New folder' }).html('<i class="fa fa-plus" style="font-size:9px;margin-right:2px"></i><i class="fa fa-folder"></i>').appendTo(footerLeft).on('click', function(e){ e.preventDefault(); createFolderHere(); });
+        $('<button>', { type: 'button', class: 'red-ui-button red-ui-button-small', title: 'New flow' }).html('<i class="fa fa-plus" style="font-size:9px;margin-right:2px"></i><i class="red-ui-icons red-ui-icons-flow folders-footer-flow-icon"></i>').appendTo(footerLeft).on('click', function(e){ e.preventDefault(); createFlowHere(); });
+        // Subflow creation is hidden until the native editor path is reliable.
+        const footerRight = $('<div>', { class: 'folders-footer-right' }).appendTo(footer);
+        footerFolderStyleButton = $('<button>', { type: 'button', class: 'red-ui-button red-ui-button-small', title: 'Icon and colour' }).html('<i class="fa fa-tint"></i>').appendTo(footerRight).on('click', function(e){ e.preventDefault(); openFolderStyleDialog(); });
+        footerDeleteButton = $('<button>', { type: 'button', class: 'red-ui-button red-ui-button-small folders-danger', title: 'Delete' }).html('<i class="fa fa-trash"></i>').appendTo(footerRight).on('click', function(e){ e.preventDefault(); openDeleteDialog(); });
+        updateFooterButtons();
+        try { RED.actions.add('folders:show', function() { RED.sidebar.show(SIDEBAR_ID); setTimeout(fixSidebarIcon, 20); }); } catch (err) {}
+        RED.sidebar.addTab({ id: SIDEBAR_ID, label: 'EXPLORER', name: 'Folders', iconClass: 'red-ui-sidebar-tab-icon fa fa-folder folders-explorer-tab-icon', content: root, action: 'folders:show' });
+        $(document).on('click.folders-sidebar-icon', 'button[data-tab-id="' + SIDEBAR_ID + '"]', function(){ setTimeout(fixSidebarIcon, 0); setTimeout(fixSidebarIcon, 80); });
+        fixSidebarIcon();
+        setTimeout(fixSidebarIcon, 50);
+        setTimeout(fixSidebarIcon, 300);
+        setTimeout(fixSidebarIcon, 1000);
+        initEvents();
+        loadConfig();
+        syncSelectedToWorkspace();
+        activeFlowId = getCurrentWorkspaceId();
+        setInterval(function(){
+            const current = getCurrentWorkspaceId();
+            if (current && current !== activeFlowId) {
+                activeFlowId = current;
+                const activeType = findSubflowById(current) ? 'subflow' : 'flow';
+                selected = { type: activeType, id: current };
+                selectedKeys = new Set([itemKey(activeType, current)]);
+                render();
+            }
+        }, 350);
+        setTimeout(render, 100); setTimeout(render, 750); setTimeout(render, 1500);
+    }
+
+    function start() {
+        init();
+    }
+
+    function stop() {
+        closeFoldersMenus();
+    }
+
+    if (window.RED && RED.plugins && typeof RED.plugins.registerPlugin === 'function') {
+        RED.plugins.registerPlugin(PLUGIN_ID, {
+            type: 'folders',
+            name: 'Folders',
+            onadd: start,
+            onremove: stop
+        });
+    } else {
+        $(start);
+    }
+})();
+</script>
