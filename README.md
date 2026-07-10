@@ -1,6 +1,6 @@
 # node-red-contrib-folders
 
-Version: `1.0.13`
+Version: `1.0.14`
 
 `node-red-contrib-folders` adds a folder-based explorer to the Node-RED editor. It is intended for larger Node-RED projects where the normal flat list of flow tabs becomes hard to scan.
 
