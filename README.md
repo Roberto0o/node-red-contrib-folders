@@ -6,6 +6,8 @@ Version: `1.0.13`
 
 Folders is an editor plugin. It does not change how Node-RED runs, deploys, or stores nodes at runtime. The folder structure is visual organisation for the editor.
 
+<img width="229" height="334" alt="folders" src="https://github.com/user-attachments/assets/5c912a87-5856-4e45-b3bc-1808bf1ad63a" />
+
 ## Features
 
 - Browse flows and subflows in one shared workspace tree.
@@ -15,8 +17,12 @@ Folders is an editor plugin. It does not change how Node-RED runs, deploys, or s
 - Search, filter, and sort the workspace.
 - Store folder metadata created date, and updated date for sorting.
 - Show additional (sub)flow information in the Node-RED information sidebar.
+<img width="208" height="192" alt="info" src="https://github.com/user-attachments/assets/9dce0d51-1524-4456-9288-45bfb5adea4f" />
+
 - Apply hide/show, enable/disable, and lock/unlock actions to flows, subflows, or whole folders.
 - Style folders, flows, and subflows with selectable icons and colours.
+<img width="298" height="434" alt="style" src="https://github.com/user-attachments/assets/40b41d12-9db4-47ec-8485-2b6468baff37" />
+
 - Features mentioned above available as right-click.
 
 Subflows use the normal flow icon by default with a small `S` badge so they remain identifiable even when a custom icon is selected.
