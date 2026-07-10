@@ -7,7 +7,7 @@
     const STYLE_ID = 'folders-style-1-0';
     const GLOBAL_CONFIG_TYPE = 'global-config';
     const GLOBAL_ENV_NAME = 'folders';
-    const VERSION = '1.0.12';
+    const VERSION = '1.0.15';
     const LOCAL_STATE_KEY = 'node-red-contrib-folders.uiState';
     const DEFAULT_FLOW_ICON = 'red-ui-icons red-ui-icons-flow';
     const DEFAULT_FOLDER_ICON = 'fa fa-folder';
@@ -34,6 +34,7 @@
     let headerSortButton;
     let headerSortDirButton;
     let footerFolderStyleButton;
+    let explorerHasFocus = false;
     let visibleOrder = [];
     let lastRangeAnchor = null;
     let folderConfig = { version: 1, folders: {}, flows: {}, subflowFolders: {}, subflows: {}, updatedAt: '' };
@@ -2105,8 +2106,7 @@
         if (selected && selected.type === 'folder') { return selected.path || ''; }
         if (selected && selected.type === 'flow') { const flow = findWorkspaceById(selected.id); return getPath(flow); }
         if (selected && selected.type === 'subflow') { const subflow = findSubflowById(selected.id); return getItemPath('subflow', subflow); }
-        const active = findWorkspaceById(getCurrentWorkspaceId());
-        return getPath(active);
+        return '';
     }
 
     function selectedSubflowBasePath() {
@@ -2190,6 +2190,7 @@
         selected = { type: 'flow', id: flow.id };
         selectedKeys = new Set([itemKey('flow', flow.id)]);
         lastRangeAnchor = itemKey('flow', flow.id);
+        editingItemKey = itemKey('flow', flow.id);
         markDirty(flow);
         try { if (RED.events && typeof RED.events.emit === 'function') { RED.events.emit('workspace:add', flow); RED.events.emit('workspace:change', flow); RED.events.emit('flows:change', flow); } } catch (err) {}
         try { if (RED.workspaces && typeof RED.workspaces.refresh === 'function') { RED.workspaces.refresh(); } } catch (err) {}
@@ -2219,6 +2220,7 @@
         selected = { type: 'flow', id: flow.id };
         selectedKeys = new Set([itemKey('flow', flow.id)]);
         lastRangeAnchor = itemKey('flow', flow.id);
+        editingItemKey = itemKey('flow', flow.id);
         markDirty(flow);
         try { if (RED.events && typeof RED.events.emit === 'function') { RED.events.emit('workspace:add', flow); RED.events.emit('workspace:change', flow); RED.events.emit('flows:change', flow); } } catch (err) {}
         setTimeout(function(){ showWorkspace(flow.id); render(); }, 80);
@@ -2456,6 +2458,15 @@
         if (footerFolderStyleButton) { footerFolderStyleButton.toggle(hasStyleSelection).prop('disabled', !hasStyleSelection).toggleClass('disabled', !hasStyleSelection); }
     }
 
+    function clearExplorerSelection() {
+        selected = null;
+        selectedKeys = new Set();
+        lastRangeAnchor = null;
+        updateFooterButtons();
+        updateInfoPanel();
+        render();
+    }
+
     function getFilterLabel() {
         const labels = { all: 'All', flows: 'Flows', subflows: 'Subflows', shown: 'Shown', hidden: 'Hidden', enabled: 'Enabled', disabled: 'Disabled', locked: 'Locked', unlocked: 'Unlocked' };
         return labels[filterMode] || 'All';
@@ -2518,7 +2529,7 @@
             $('<a>', { href: '#', class: 'folders-submenu-toggle' }).html('<span class="folders-menu-check">+</span><span>New</span>').appendTo(wrap).on('click', function(e) { e.preventDefault(); });
             const sub = $('<div>', { class: 'folders-menu folders-submenu' }).appendTo(wrap);
             [
-                ['Folder', '<i class="fa fa-folder"></i>', function() { createFolderHere(basePath); }],
+                ['Folder', '<i class="fa fa-folder folders-menu-folder-icon"></i>', function() { createFolderHere(basePath); }],
                 ['Flow', '<i class="' + esc(DEFAULT_FLOW_ICON) + ' folders-footer-flow-icon"></i>', function() { createFlowHere(basePath); }]
             ].forEach(function(item) {
                 $('<a>', { href: '#' }).html('<span class="folders-menu-check">' + item[1] + '</span><span>' + esc(item[0]) + '</span>').appendTo(sub).on('click', function(e) {
@@ -2641,22 +2652,19 @@
         const borderList = $('<div>', { class: 'red-ui-editableList-border red-ui-editableList-container' }).appendTo(editList);
         tree = $('<ol>', { class: 'red-ui-treeList-list red-ui-editableList-list' }).appendTo(borderList);
         bindDropTarget(treeWrap, '');
+        root.on('mousedown', function() {
+            explorerHasFocus = true;
+        });
         treeWrap.on('click', function(e) {
             if ($(e.target).closest('.red-ui-treeList-label,button,input,a,.folders-menu').length) { return; }
-            selected = null;
-            selectedKeys = new Set();
-            lastRangeAnchor = null;
-            updateFooterButtons();
-            updateInfoPanel();
-            render();
+            explorerHasFocus = true;
+            clearExplorerSelection();
         });
         treeWrap.on('contextmenu', function(e) {
             if ($(e.target).closest('.red-ui-treeList-label,button,input,a,.folders-menu').length) { return; }
             e.preventDefault();
-            selected = null;
-            selectedKeys = new Set();
-            lastRangeAnchor = null;
-            updateFooterButtons();
+            explorerHasFocus = true;
+            clearExplorerSelection();
             openContextMenu(e, { type: 'workspace', path: '' });
         });
         form.on('submit', function(e) { e.preventDefault(); });
@@ -2666,9 +2674,15 @@
         headerSortButton.on('click', function(e){ e.preventDefault(); openHeaderMenu(headerSortButton, 'sort'); });
         sortDirButton.on('click', function(e){ e.preventDefault(); sortDir = sortDir === 'asc' ? 'desc' : 'asc'; saveLocalState(); updateHeaderLabels(); render(); });
         $(document).on('mousedown.folders-menu', function(e){ if (!$(e.target).closest('.folders-menu,.folders-header').length) { closeFoldersMenus(); } });
+        $(document).on('mousedown.folders-selection', function(e) {
+            if ($(e.target).closest('.folders-explorer,.folders-menu,.ui-dialog').length) { return; }
+            explorerHasFocus = false;
+            if (selected) { clearExplorerSelection(); }
+        });
         $(document).on('keydown.folders-delete', function(e) {
             const tag = String(e.target && e.target.tagName || '').toLowerCase();
             if (tag === 'input' || tag === 'textarea' || tag === 'select' || $(e.target).closest('.ui-dialog').length) { return; }
+            if (!explorerHasFocus) { return; }
             if (e.key === 'Delete' || e.key === 'Backspace' || e.which === 46 || e.which === 8) {
                 if (selected && (selected.type === 'folder' || selected.type === 'flow')) {
                     e.preventDefault();

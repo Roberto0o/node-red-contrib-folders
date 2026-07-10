@@ -1,6 +1,6 @@
 {
   "name": "node-red-contrib-folders",
-  "version": "1.0.14",
+  "version": "1.0.15",
   "description": "Organize Node-RED flows with a structured folder explorer for cleaner navigation in large projects.",
   "license": "MIT",
   "author": {
@@ -17,10 +17,10 @@
     "node-red",
     "node-red-plugin",
     "node-red-contrib",
-    "folders",
-    "folder",
     "flow-explorer",
     "explorer",
+    "folders",
+    "folder",
     "flows",
     "structure"
   ],

@@ -170,6 +170,10 @@
     font-style:normal!important
 }
 
+.folders-menu .folders-menu-folder-icon {
+    color:#777!important
+}
+
 
 .folders-menu a:hover {
     background:var(--red-ui-list-item-background-hover,rgba(0,0,0,.045))
