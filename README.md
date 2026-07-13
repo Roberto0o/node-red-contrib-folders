@@ -7,12 +7,12 @@ Folders adds a folder hierarchy to Node-RED's built-in Explorer for organising f
 ## Features
 
 - Organise flows and subflows together in nested folders.
-<img width="402" height="846" alt="folders" src="https://github.com/user-attachments/assets/62510b46-cd2a-4ad7-9e1d-5ad4c1fc3572" />
+<img width="201" height="423" alt="folders" src="https://github.com/user-attachments/assets/62510b46-cd2a-4ad7-9e1d-5ad4c1fc3572" />
 
 - Create, rename, move, multi-select, and drag folders, flows, and subflows.
 - Search the active view and filter or sort workspace items by name, date, type, and flow state.
 - Apply custom colours and icons to folders and flows.
-<img width="593" height="610" alt="style" src="https://github.com/user-attachments/assets/623cb4ad-e8c0-4a67-928b-2a14d5edc2ec" />
+<img width="296.5" height="305" alt="style" src="https://github.com/user-attachments/assets/623cb4ad-e8c0-4a67-928b-2a14d5edc2ec" />
 
 - Hide, disable, or lock all supported items inside a folder, including nested folders.
 - Hide individual subflows from the Explorer.
@@ -42,4 +42,3 @@ Folder data is stored in the global environment variable named `folders`. Collap
 ## License
 
 Licensed under the [MIT License](LICENSE).
-
