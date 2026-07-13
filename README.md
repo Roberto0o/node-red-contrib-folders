@@ -1,52 +1,41 @@
-# node-red-contrib-folders
+# Folders
 
-Version: `1.0.15`
+`node-red-contrib-folders`
 
-`node-red-contrib-folders` adds a folder-based explorer to the Node-RED editor. It is intended for larger Node-RED projects where the normal flat list of flow tabs becomes hard to scan.
-
-Folders is an editor plugin. It does not change how Node-RED runs, deploys, or stores nodes at runtime. The folder structure is visual organisation for the editor.
-
-<img width="229" height="334" alt="folders" src="https://github.com/user-attachments/assets/5c912a87-5856-4e45-b3bc-1808bf1ad63a" />
+Folders adds a folder hierarchy to Node-RED's built-in Explorer for organising flows and subflows. It keeps the native Explorer rows and controls while adding batch actions, appearance settings, sorting, filtering, and a dedicated view for global configuration nodes.
 
 ## Features
 
-- Browse flows and subflows in one shared workspace tree.
-- Create folders, flows from the explorer.
-- Move flows, subflows, and folders with drag and drop.
-- Rename flows, subflows, and folders from the explorer.
-- Search, filter, and sort the workspace.
-- Store folder metadata created date, and updated date for sorting.
-- Show additional (sub)flow information in the Node-RED information sidebar.
-<img width="208" height="192" alt="info" src="https://github.com/user-attachments/assets/9dce0d51-1524-4456-9288-45bfb5adea4f" />
+- Organise flows and subflows together in nested folders.
+- Create, rename, move, multi-select, and drag folders, flows, and subflows.
+- Search the active view and filter or sort workspace items by name, date, type, and flow state.
+- Apply custom colours and icons to folders and flows.
+- Hide, disable, or lock all supported items inside a folder, including nested folders.
+- Hide individual subflows from the Explorer.
+- Delete folders recursively with a clear warning when contained flows or subflows have nodes.
+- Switch between the flow hierarchy and Node-RED's global configuration nodes from the Explorer header.
+- Store folder structure, state defaults, and appearance metadata with the flow configuration.
 
-- Apply hide/show, enable/disable, and lock/unlock actions to flows, subflows, or whole folders.
-- Style folders, flows, and subflows with selectable icons and colours.
-<img width="298" height="434" alt="style" src="https://github.com/user-attachments/assets/40b41d12-9db4-47ec-8485-2b6468baff37" />
+## Behaviour
 
-- Features mentioned above available as right-click.
+A single click selects a folder, flow, subflow, or node. Selecting a flow or subflow also opens its workspace; double-clicking opens its editor or the selected node's edit dialog.
 
-Subflows use the normal flow icon by default with a small `S` badge so they remain identifiable even when a custom icon is selected.
+Use <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>-click to add or remove individual items from a selection. Use <kbd>Shift</kbd>-click for a visible range, or <kbd>Ctrl</kbd>/<kbd>Cmd</kbd>+<kbd>Shift</kbd>-click to extend the current selection. Supported appearance, state, delete, and drag actions apply to the complete selection.
 
-## Storage
+Press <kbd>F2</kbd> to rename the selected item in place. <kbd>Enter</kbd> saves, <kbd>Escape</kbd> cancels, and the normal cursor keys remain available while editing.
 
-Project structure data is stored in a Node-RED global environment variable named:
+New folders and flows are created in the selected directory and receive collision-safe names such as **New folder 2** or **New flow 2**. A new row stays where it is when already fully visible; otherwise, its parent path opens and the Explorer centres it as far as the available scroll range permits.
 
-```text
-folders
-```
+Moving a flow or folder into another folder applies that destination's stored hidden, disabled, and locked defaults. Newly created flows always start enabled. Dragging an item onto empty Explorer space moves it to the root.
 
-Node-RED stores this global environment variables with the flow file, so the folder structure can be exported, backed up, etc, together with the rest of the project.
+Folder data is stored in the global environment variable named `folders`. Collapsed state, sorting, filtering, and the selected Explorer view are browser preferences.
 
-Local editor-only preferences, such as open folders and sort/filter settings, are stored in the browser local storage. These preferences are not written to `flows.json`.
+## Requirements
 
-## Compatibility
+- Node-RED 5.0 or newer
+- Node.js 22.9 or newer
 
-This package is designed for Node-RED `>=5` and Node.js `>=18.5`.
+## License
 
-If another user opens the project without this package installed, the Node-RED project will still run normally. They simply will not see the Folders explorer or its visual organisation.
+Licensed under the [MIT License](LICENSE).
 
-## Removing
-
-Removing the package only removes the editor plugin. It does not delete the saved `folders` project metadata from your flow file.
-
-To fully reset the saved folder structure, remove the `folders` global environment variable from the project.

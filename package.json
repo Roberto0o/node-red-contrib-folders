@@ -1,38 +1,43 @@
 {
   "name": "node-red-contrib-folders",
-  "version": "1.0.15",
-  "description": "Organize Node-RED flows with a structured folder explorer for cleaner navigation in large projects.",
+  "version": "2.0.0",
+  "description": "Add folders to Node-RED 5's native Explorer while preserving its live flow, subflow, and node controls.",
+  "keywords": [
+    "node-red",
+    "node-red-plugin",
+    "node-red-contrib",
+    "editor",
+    "explorer",
+    "folders",
+    "flows"
+  ],
+  "homepage": "https://github.com/Roberto0o/node-red-contrib-folders#readme",
+  "bugs": {
+    "url": "https://github.com/Roberto0o/node-red-contrib-folders/issues"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/Roberto0o/node-red-contrib-folders.git"
+  },
   "license": "MIT",
   "author": {
     "name": "Robert W. (Robert0)",
     "url": "https://github.com/Roberto0o"
   },
-  "homepage": "https://github.com/Roberto0o/node-red-contrib-folders#readme",
-  "repository": {
-    "type": "git",
-    "url": "git+https://github.com/Roberto0o/node-red-contrib-folders.git"
+  "engines": {
+    "node": ">=22.9"
   },
-  "bugs": "https://github.com/Roberto0o/node-red-contrib-folders/issues",
-  "keywords": [
-    "node-red",
-    "node-red-plugin",
-    "node-red-contrib",
-    "flow-explorer",
-    "explorer",
-    "folders",
-    "folder",
-    "flows",
-    "structure"
-  ],
+  "scripts": {
+    "test": "node --check resources/folders-model.js && node --check resources/folders.js"
+  },
   "files": [
     "folders.html",
     "resources",
     "README.md",
-    "LICENSE"
+    "LICENSE",
+    "CHANGELOG",
+    "TODO.md"
   ],
-  "engines": {
-    "node": ">=18.5"
-  },
   "node-red": {
     "version": ">=5.0.0",
     "plugins": {

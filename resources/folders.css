@@ -1,832 +1,672 @@
-.folders-explorer {
-    height:100%;
-    display:flex;
-    flex-direction:column;
-    overflow:hidden;
-    background:#fff;
-    color:var(--red-ui-primary-text-color,#333);
-    font-size:14px
+.folders-native-explorer {
+  height: 100%;
+  display: flex;
+  flex-direction: column;
+  min-height: 0;
+  overflow: hidden;
+  color: var(--red-ui-primary-text-color, #333);
+  background: var(--red-ui-view-background, #fff);
+  font-size: 14px;
 }
 
-
-.folders-explorer .red-ui-info-outline {
-    height:100%;
-    display:flex;
-    flex-direction:column;
-    background:#fff;
-    overflow:hidden
+.folders-native-explorer > .folders-native-owned.red-ui-info-toolbar,
+.folders-native-explorer > .folders-native-owned.red-ui-info-outline-project {
+  flex: 0 0 auto;
 }
 
+.folders-native-explorer > .folders-native-owned.red-ui-treeList {
+  flex: 1 1 auto;
+  min-height: 0;
+}
+
+.folders-native-explorer:not(.folders-native-configuration-active)
+  .folders-native-config-root,
+.folders-native-explorer .folders-native-subflow-source-root {
+  display: none !important;
+}
+
+.folders-native-explorer.folders-native-configuration-active
+  .folders-native-combined-root {
+  display: none !important;
+}
+
+/* Search filtering toggles TreeList list items directly. Keep the unused
+   native roots hidden at the list-item level so they cannot create gaps. */
+.folders-native-explorer:not(.folders-native-configuration-active)
+  .folders-native-config-root-item,
+.folders-native-explorer .folders-native-subflow-root-item,
+.folders-native-explorer.folders-native-configuration-active
+  .folders-native-flow-root-item {
+  display: none !important;
+}
+
+.folders-native-combined-root > .red-ui-treeList-label,
+.folders-native-config-root > .red-ui-treeList-label {
+  display: none !important;
+}
+
+.folders-native-combined-root > .red-ui-editableList,
+.folders-native-config-root > .red-ui-editableList {
+  display: block !important;
+}
+
+.folders-native-explorer.folders-native-configuration-active
+  > .folders-native-owned.red-ui-treeList,
+.folders-native-explorer.folders-native-configuration-active
+  .folders-native-config-root,
+.folders-native-explorer.folders-native-configuration-active
+  .folders-native-config-root
+  > .red-ui-editableList,
+.folders-native-explorer.folders-native-configuration-active
+  .folders-native-config-type
+  > .red-ui-editableList {
+  margin-top: 0 !important;
+  padding-top: 0 !important;
+}
+
+.folders-native-combined-root
+  > .red-ui-editableList
+  > .red-ui-editableList-container
+  > ol
+  > li
+  > .red-ui-editableList-item-content
+  > .red-ui-treeList-label
+  > span:first-child {
+  width: 0 !important;
+}
+
+.folders-header-toggle {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: auto !important;
+  min-width: 52px;
+  max-width: none !important;
+  height: 20px !important;
+  min-height: 20px !important;
+  padding: 0 7px !important;
+  font-size: 11px !important;
+  line-height: 18px !important;
+  white-space: nowrap;
+}
+
+.folders-native-explorer .red-ui-sidebar-banner-tools,
+.folders-native-explorer ~ .red-ui-sidebar-banner .red-ui-sidebar-banner-tools {
+  overflow: visible;
+}
 
 .folders-explorer .red-ui-info-toolbar {
-    flex:0 0 auto;
-    border-bottom:1px solid var(--red-ui-secondary-border-color,#ddd);
-    background:#fff
+  flex: 0 0 auto;
+  border-bottom: 1px solid var(--red-ui-secondary-border-color, #ddd);
+  background: var(--red-ui-view-background, #fff);
 }
-
 
 .folders-explorer .red-ui-searchBox-container {
-    width:100%;
-    box-sizing:border-box
+  width: 100%;
+  box-sizing: border-box;
 }
-
-
-.folders-explorer .red-ui-searchBox-container>i.fa-search {
-    font-size:10px!important;
-    line-height:normal!important;
-    top:8px!important
-}
-
 
 .folders-explorer .red-ui-searchBox-input {
-    font-size:14px
+  padding-right: 24px !important;
+  font-size: 14px;
 }
-
-
-.folders-explorer .red-ui-searchBox-container.has-value .red-ui-searchBox-clear {
-    display:block
-}
-
-
 
 .folders-explorer .folders-header {
-    flex:0 0 auto;
-    height:28px;
-    display:flex;
-    align-items:center;
-    gap:0;
-    border-bottom:0;
-    background:#fff;
-    padding:2px 4px;
-    box-sizing:border-box;
-    overflow:visible
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  gap: 0;
+  height: 28px;
+  padding: 2px 4px;
+  box-sizing: border-box;
+  overflow: visible;
+  border-bottom: 0;
+  background: var(--red-ui-view-background, #fff);
 }
-
 
 .folders-explorer .folders-header .button-group {
-    display:inline-flex;
-    align-items:center;
-    margin-right:1px;
-    height:22px;
-    white-space:nowrap;
-    flex:0 0 auto
+  display: inline-flex;
+  flex: 0 0 auto;
+  align-items: center;
+  height: 22px;
+  margin-right: 1px;
+  white-space: nowrap;
 }
-
 
 .folders-explorer .folders-header .folders-header-control {
-    height:22px!important;
-    line-height:20px!important;
-    font-size:11px!important;
-    font-family:var(--red-ui-primary-font,"Helvetica Neue",Arial,Helvetica,sans-serif)!important;
-    box-sizing:border-box!important;
-    display:inline-flex!important;
-    align-items:center!important;
-    gap:2px;
-    text-decoration:none;
-    color:var(--red-ui-primary-text-color,#333);
-    white-space:nowrap;
-    padding:0 5px!important
+  display: inline-flex !important;
+  align-items: center !important;
+  gap: 2px;
+  height: 22px !important;
+  padding: 0 5px !important;
+  box-sizing: border-box !important;
+  color: var(--red-ui-primary-text-color, #333);
+  font-family: var(
+    --red-ui-primary-font,
+    "Helvetica Neue",
+    Arial,
+    sans-serif
+  ) !important;
+  font-size: 11px !important;
+  line-height: 20px !important;
+  text-decoration: none;
+  white-space: nowrap;
 }
-
 
 .folders-explorer .folders-header .folders-header-control span {
-    display:inline-block;
-    max-width:48px;
-    overflow:hidden;
-    text-overflow:ellipsis;
-    vertical-align:middle;
-    font-family:inherit!important;
-    font-weight:400!important
+  display: inline-block;
+  max-width: 48px;
+  overflow: hidden;
+  font-weight: 400 !important;
+  text-overflow: ellipsis;
+  vertical-align: middle;
 }
-
 
 .folders-explorer .folders-header .folders-sort-button span {
-    max-width:50px
+  max-width: 50px;
 }
-
 
 .folders-explorer .folders-header .folders-dir-group {
-    margin-left:-2px;
-    margin-right:0
+  margin-right: 0;
+  margin-left: -2px;
 }
-
 
 .folders-explorer .folders-header .folders-sort-dir {
-    min-width:28px;
-    justify-content:center;
-    padding-left:5px!important;
-    padding-right:5px!important
+  min-width: 28px;
+  padding-right: 5px !important;
+  padding-left: 5px !important;
+  justify-content: center;
 }
-
-
 
 .folders-menu {
-    position:absolute;
-    z-index:3000;
-    min-width:120px;
-    background:#fff;
-    border:1px solid var(--red-ui-secondary-border-color,#ccc);
-    box-shadow:0 2px 8px rgba(0,0,0,.18);
-    padding:3px 0;
-    border-radius:2px;
-    font-size:12px!important;
-    font-family:var(--red-ui-primary-font,"Helvetica Neue",Arial,Helvetica,sans-serif)!important;
-    color:var(--red-ui-primary-text-color,#333)
+  position: absolute;
+  z-index: 4000;
+  min-width: 120px;
+  padding: 3px 0;
+  color: var(--red-ui-primary-text-color, #333);
+  background: var(--red-ui-view-background, #fff);
+  border: 1px solid var(--red-ui-secondary-border-color, #ccc);
+  border-radius: 2px;
+  box-shadow: 0 2px 8px rgb(0 0 0 / 18%);
+  font-size: 12px;
+  font-family: var(
+    --red-ui-primary-font,
+    "Helvetica Neue",
+    Arial,
+    sans-serif
+  ) !important;
 }
 
-
-.folders-menu * {
-    font-family:var(--red-ui-primary-font,"Helvetica Neue",Arial,Helvetica,sans-serif)!important;
-    font-size:12px!important
+.folders-menu a,
+.folders-menu span,
+.folders-native-menu,
+.folders-native-menu button,
+.folders-native-menu span {
+  font-family: var(
+    --red-ui-primary-font,
+    "Helvetica Neue",
+    Arial,
+    sans-serif
+  ) !important;
 }
 
+.folders-header-toggle:focus,
+.folders-header-toggle:focus-visible,
+.folders-header-toggle.ui-state-focus {
+  outline: none !important;
+  box-shadow: none !important;
+}
 
 .folders-menu a {
-    display:flex;
-    align-items:center;
-    gap:6px;
-    height:24px;
-    line-height:24px;
-    padding:0 8px;
-    text-decoration:none;
-    color:var(--red-ui-primary-text-color,#333);
-    cursor:pointer;
-    white-space:nowrap
+  display: flex;
+  align-items: center;
+  min-height: 24px;
+  padding: 1px 10px 1px 5px;
+  color: var(--red-ui-primary-text-color, #333);
+  text-decoration: none;
 }
 
+.folders-menu a:hover,
+.folders-menu a.selected {
+  background: var(--red-ui-list-item-background-hover, #eee);
+}
 
 .folders-menu-check {
-    display:inline-block;
-    width:12px;
-    text-align:center;
-    font-family:var(--red-ui-primary-font,"Helvetica Neue",Arial,Helvetica,sans-serif)!important;
-    font-size:12px!important
+  display: inline-flex;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
 }
 
-
-.folders-menu-check i.fa,.folders-menu i.fa {
-    font-family:FontAwesome!important;
-    font-size:12px!important;
-    font-style:normal!important
+.folders-native-info-panel {
+  display: grid;
+  grid-template-columns: minmax(80px, 0.7fr) minmax(120px, 1.3fr);
+  margin: 10px;
+  overflow: hidden;
+  border: 1px solid var(--red-ui-secondary-border-color, #ddd);
+  border-radius: 3px;
+  font-size: 12px;
 }
 
-.folders-menu .folders-menu-folder-icon {
-    color:#777!important
+.folders-native-info-label,
+.folders-native-info-value {
+  min-width: 0;
+  padding: 6px 8px;
+  overflow-wrap: anywhere;
+  border-bottom: 1px solid var(--red-ui-secondary-border-color, #ddd);
 }
 
-
-.folders-menu a:hover {
-    background:var(--red-ui-list-item-background-hover,rgba(0,0,0,.045))
+.folders-native-info-label {
+  color: var(--red-ui-secondary-text-color, #666);
+  background: var(--red-ui-secondary-background, #f5f5f5);
 }
 
-
-.folders-menu a.selected {
-    font-weight:600;
-    background:var(--red-ui-list-item-background-selected,#d8eaff)
+.folders-native-info-label:nth-last-child(-n + 2),
+.folders-native-info-value:nth-last-child(-n + 2) {
+  border-bottom: 0;
 }
 
-
-.folders-menu a i.fa-check {
-    width:12px;
-    color:var(--red-ui-secondary-text-color,#777)
+.folders-native-folder-row {
+  display: flex;
+  align-items: center;
+  min-width: 0;
+  width: 100%;
+  height: 24px;
+  line-height: 24px;
+  box-sizing: border-box;
 }
 
-
-.folders-menu a.folders-danger-action,.folders-menu a.folders-danger-action span,.folders-menu a.folders-danger-action i {
-    color:#b00020!important
+.folders-explorer .red-ui-treeList-label.folders-native-item,
+.folders-explorer
+  .red-ui-treeList-label.folders-native-item
+  .red-ui-info-outline-item-label,
+.folders-explorer .folders-native-folder-row,
+.folders-explorer .folders-native-folder-name {
+  font-family: var(--red-ui-primary-font, Arial, sans-serif);
+  font-size: 13px !important;
+  font-weight: 400;
+  letter-spacing: normal;
 }
 
-
-.folders-menu .folders-submenu-wrap {
-    position:relative
+.folders-explorer
+  .red-ui-treeList-label.folders-native-item
+  .red-ui-info-outline-item-label {
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
-
-.folders-menu .folders-submenu-toggle:after {
-    content:"\f105";
-    font-family:FontAwesome;
-    margin-left:auto;
-    color:var(--red-ui-secondary-text-color,#777)
+.folders-explorer .red-ui-treeList-label.folders-multi-selected {
+  color: var(--red-ui-list-item-color, var(--red-ui-primary-text-color, #333));
+  background: var(--red-ui-list-item-background-selected, #d8eaff) !important;
+  outline: none;
 }
 
-
-.folders-menu .folders-submenu {
-    display:none;
-    left:100%;
-    top:-4px
+.folders-native-folder-icon {
+  display: inline-flex;
+  flex: 0 0 20px;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  color: var(--folders-item-color, var(--red-ui-secondary-text-color, #666));
 }
 
-
-.folders-menu .folders-submenu-wrap:hover>.folders-submenu {
-    display:block
+.folders-native-folder-name {
+  flex: 1 1 auto;
+  min-width: 0;
+  overflow: hidden;
+  color: var(--red-ui-primary-text-color, #333);
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
-
-
-
-.folders-explorer .red-ui-treeList {
-    flex:1 1 auto;
-    min-height:0;
-    width:100%;
-    position:relative;
-    overflow:hidden;
-    background:#fff
-}
-
-
-.folders-explorer .red-ui-treeList-container {
-    position:absolute;
-    inset:0;
-    background:#fff
-}
-
-
-.folders-explorer .red-ui-treeList-container>.red-ui-editableList {
-    position:absolute;
-    inset:0
-}
-
-
-.folders-explorer .red-ui-treeList-container>.red-ui-editableList>.red-ui-editableList-container {
-    position:absolute;
-    inset:0;
-    overflow-y:auto;
-    overflow-x:hidden
-}
-
-
-.folders-explorer ol.red-ui-treeList-list {
-    list-style:none;
-    margin:0;
-    padding:0;
-    min-height:0;
-    height:auto;
-    background:#fff;
-    position:static;
-    inset:auto
-}
-
-
-.folders-explorer li {
-    list-style:none;
-    margin:0;
-    padding:0;
-    background:#fff
-}
-
-
-.folders-explorer .red-ui-editableList-item-content {
-    background:#fff
-}
-
-
-.folders-explorer .red-ui-treeList-label {
-    height:24px;
-    min-height:24px;
-    line-height:24px;
-    box-sizing:border-box;
-    display:flex;
-    align-items:center;
-    white-space:nowrap;
-    cursor:pointer;
-    color:var(--red-ui-primary-text-color,#333);
-    border:1px solid transparent;
-    background:#fff;
-    user-select:none
-}
-
-
-.folders-explorer .red-ui-treeList-label:hover {
-    background:var(--red-ui-list-item-background-hover,rgba(0,0,0,.045))
-}
-
-
-.folders-explorer .red-ui-treeList-label.selected {
-    background:var(--red-ui-list-item-background-selected,#d8eaff);
-    border-color:var(--red-ui-list-item-border-selected,#4a90e2)
-}
-
-
-.folders-explorer .red-ui-treeList-label.focus {
-    outline:none
-}
-
-
-.folders-explorer .red-ui-treeList-icon {
-    display:inline-block;
-    flex:0 0 15px;
-    width:15px;
-    text-align:center;
-    color:var(--red-ui-secondary-text-color,#666);
-    font-size:13px;
-    line-height:22px
-}
-
-
-.folders-explorer .red-ui-treeList-icon .fa-angle-right {
-    transition:transform .12s ease;
-    transform-origin:center center
-}
-
-
-.folders-explorer .red-ui-editableList-item-content.expanded>.red-ui-treeList-label>.red-ui-treeList-icon:first-of-type .fa-angle-right {
-    transform:rotate(90deg)
-}
-
-
-.folders-explorer .red-ui-treeList-label-text {
-    overflow:hidden;
-    text-overflow:ellipsis;
-    min-width:0;
-    flex:1 1 auto;
-    color:var(--red-ui-primary-text-color,#333)
-}
-
-
-.folders-explorer .red-ui-icons.red-ui-icons-flow {
-    font-size:12px;
-    line-height:22px;
-    vertical-align:middle
-}
-
-
-.folders-explorer .red-ui-info-outline-item {
-    display:flex;
-    align-items:center;
-    min-width:0;
-    flex:1 1 auto;
-    position:relative;
-    height:22px;
-    line-height:22px;
-    overflow:hidden;
-    margin-left:5px
-}
-
-
-.folders-explorer .red-ui-info-outline-item-label {
-    overflow:hidden;
-    text-overflow:ellipsis;
-    white-space:nowrap;
-    min-width:0;
-    flex:1 1 auto;
-    color:var(--red-ui-primary-text-color,#333)
-}
-
-
-.folders-explorer .red-ui-info-outline-item-flow .red-ui-info-outline-item-label {
-    font-weight:400
-}
-
-
-.folders-explorer .red-ui-treeList-label.selected .red-ui-info-outline-item-label {
-    font-weight:400;
-    color:var(--red-ui-primary-text-color,#333)
-}
-
-
-.folders-explorer .red-ui-info-outline-item-empty {
-    font-style:italic;
-    color:var(--red-ui-secondary-text-color,#777);
-    padding-left:0;
-    line-height:22px
-}
-
-
-.folders-explorer .red-ui-treeList-label.folders-disabled .red-ui-info-outline-item-label,.folders-explorer .red-ui-treeList-label.folders-disabled .folders-folder-label {
-    font-style:italic;
-    color:#888
-}
-
-
-.folders-explorer .red-ui-treeList-label.folders-disabled .red-ui-treeList-icon i {
-    color:#999!important;
-    background-color:transparent!important;
-    opacity:.75
-}
-
-
-
-.folders-explorer .red-ui-info-outline-item-controls {
-    display:flex;
-    gap:1px;
-    align-items:center;
-    justify-content:flex-end;
-    flex:0 0 70px;
-    width:70px;
-    margin-left:4px;
-    opacity:1;
-    transition:opacity .08s ease
-}
-
-
-.folders-explorer .red-ui-info-outline-item-controls .red-ui-button {
-    visibility:hidden;
-    opacity:0;
-    pointer-events:none
-}
-
-
-.folders-explorer .red-ui-treeList-label:hover .red-ui-info-outline-item-controls .red-ui-button {
-    visibility:visible;
-    opacity:1;
-    pointer-events:auto
-}
-
-
-.folders-explorer .red-ui-info-outline-item-controls .red-ui-button.folders-state-active {
-    visibility:visible;
-    opacity:1
-}
-
-
-.folders-explorer .red-ui-treeList-label:not(:hover) .red-ui-info-outline-item-controls .red-ui-button.folders-state-active {
-    background:transparent!important;
-    border-color:transparent!important;
-    box-shadow:none!important;
-    pointer-events:none;
-    color:var(--red-ui-secondary-text-color,#777)
-}
-
-
-.folders-explorer .red-ui-info-outline-item-controls .red-ui-button .folders-icon-off {
-    display:inline-block
-}
-
-
-.folders-explorer .red-ui-info-outline-item-controls .red-ui-button .folders-icon-on {
-    display:none
-}
-
-
-.folders-explorer .red-ui-info-outline-item-controls .red-ui-button.folders-state-active .folders-icon-off {
-    display:none!important
-}
-
-
-.folders-explorer .red-ui-info-outline-item-controls .red-ui-button.folders-state-active .folders-icon-on {
-    display:inline-block!important
-}
-
-
-.folders-explorer .folders-toggle {
-    cursor:pointer
-}
-
-
-.folders-explorer .red-ui-treeList-label,.folders-explorer button,.folders-explorer a,.folders-explorer select {
-    cursor:pointer
-}
-
-
-.folders-explorer .red-ui-editableList .red-ui-editableList {
-    overflow:hidden
-}
-
-
-.folders-explorer .folders-indent {
-    display:inline-block;
-    flex-shrink:0
-}
-
-
-.folders-explorer .folders-folder-label {
-    font-weight:400
-}
-
-
-.folders-explorer .folders-folder-actions {
-    display:flex;
-    gap:1px;
-    margin-left:auto;
-    align-items:center;
-    flex:0 0 92px!important;
-    width:92px!important;
-    transition:opacity .08s ease
-}
-
-
-.folders-explorer .folders-folder-actions .red-ui-button {
-    visibility:hidden;
-    opacity:0;
-    pointer-events:none
-}
-
-
-.folders-explorer .red-ui-treeList-label:hover .folders-folder-actions .red-ui-button {
-    visibility:visible;
-    opacity:1;
-    pointer-events:auto
-}
-
 
 .folders-explorer .folders-inline-folder {
-    height:15px!important;
-    line-height:14px!important;
-    font-size:13px!important;
-    padding:0 2px!important;
-    margin-left:5px;
-    box-sizing:border-box;
-    min-width:34px;
-    max-width:calc(100% - 98px);
-    border:1px solid var(--red-ui-form-input-border-color,#999);
-    border-radius:1px!important;
-    background:#fff;
-    color:var(--red-ui-primary-text-color,#333);
-    position:relative;
-    top:6px
+  position: relative;
+  top: 5px;
+  min-width: 34px;
+  max-width: calc(100% - 98px);
+  height: 18px !important;
+  margin-left: 3px;
+  padding: 0 2px !important;
+  box-sizing: border-box;
+  color: var(--red-ui-primary-text-color, #333);
+  background: var(--red-ui-form-input-background, #fff);
+  border: 1px solid var(--red-ui-form-input-border-color, #999);
+  border-radius: 1px !important;
+  font-size: 13px !important;
+  line-height: 16px !important;
 }
 
-
-.folders-explorer .folders-subflow-icon-wrap,.folders-subflow-icon-wrap {
-    position:relative;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    flex:0 0 15px;
-    width:15px;
-    height:22px
+.folders-explorer .folders-folder-actions {
+  display: flex;
+  flex: 0 0 92px !important;
+  align-items: center;
+  gap: 1px;
+  width: 92px !important;
+  margin-left: auto;
 }
 
-
-.folders-explorer .folders-subflow-icon-wrap>.red-ui-treeList-icon,.folders-subflow-icon-wrap>.red-ui-treeList-icon {
-    flex:0 0 15px;
-    width:15px
+.folders-explorer .folders-folder-actions .red-ui-button {
+  visibility: hidden;
+  opacity: 0;
+  pointer-events: none;
 }
 
-
-.folders-subflow-badge {
-    position:absolute;
-    right:-3px;
-    bottom:1px;
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    width:10px;
-    height:10px;
-    border-radius:2px;
-    border:1px solid var(--red-ui-secondary-border-color,#aaa);
-    font-size:8px!important;
-    line-height:8px!important;
-    color:var(--red-ui-primary-text-color,#333);
-    background:#fff;
-    box-sizing:border-box;
-    z-index:2;
-    font-family:var(--red-ui-primary-font,"Helvetica Neue",Arial,Helvetica,sans-serif)!important
+.folders-explorer
+  .red-ui-treeList-label:hover
+  .folders-folder-actions
+  .red-ui-button,
+.folders-explorer
+  .red-ui-treeList-label.selected
+  .folders-folder-actions
+  .red-ui-button,
+.folders-explorer
+  .red-ui-treeList-label.folders-multi-selected
+  .folders-folder-actions
+  .red-ui-button {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
 }
 
-
-.folders-menu .red-ui-icons,.folders-footer .red-ui-icons {
-    font-size:9px!important;
-    line-height:11px!important;
-    width:11px!important;
-    height:11px!important;
-    display:inline-block!important;
-    vertical-align:middle
+.folders-explorer
+  .folders-folder-actions
+  .folders-folder-state.folders-state-active {
+  visibility: visible;
+  opacity: 1;
+  pointer-events: auto;
 }
 
-
-.folders-explorer .folders-drop-over {
-    background:var(--red-ui-list-item-background-hover,#eef6ff)!important;
-    outline:1px dashed var(--red-ui-primary-border-color,#999);
-    outline-offset:-2px
+.folders-folder-state .folders-icon-on {
+  display: none;
 }
 
-
-
-.folders-footer {
-    position:relative;
-    flex:0 0 auto;
-    margin-top:auto;
-    border-top:1px solid var(--red-ui-secondary-border-color,#ddd);
-    background:#fff;
-    padding:4px;
-    display:flex;
-    gap:4px;
-    align-items:center;
-    justify-content:flex-start
+.folders-folder-state.folders-state-active .folders-icon-off {
+  display: none;
 }
 
-
-.folders-footer .red-ui-button {
-    height:24px;
-    line-height:22px;
-    padding:0 7px;
-    font-size:12px
+.folders-folder-state.folders-state-active .folders-icon-on {
+  display: inline-block;
 }
 
-
-.folders-footer-left,.folders-footer-right {
-    display:flex;
-    gap:4px;
-    align-items:center
+.folders-subflow-hide .fa-eye-slash {
+  display: none;
 }
 
-
-.folders-footer-right {
-    margin-left:auto
+.red-ui-info-outline-item-hidden .folders-subflow-hide .fa-eye {
+  display: none;
 }
 
-
-.folders-footer .folders-footer-flow-icon {
-    font-size:9px!important;
-    line-height:11px!important;
-    width:11px!important;
-    height:11px!important;
-    display:inline-block!important;
-    vertical-align:middle!important
+.red-ui-info-outline-item-hidden .folders-subflow-hide .fa-eye-slash {
+  display: inline-block;
 }
 
-
-.folders-footer .fa-folder,.folders-explorer-tab-icon.fa {
-    color:#777!important
+.folders-native-has-color > .red-ui-treeList-icon i,
+.folders-native-has-color .folders-native-custom-icon i,
+.folders-native-has-color .folders-native-folder-icon i {
+  color: var(--folders-item-color) !important;
 }
 
-
-.folders-danger i {
-    color:#c20
+.folders-native-has-color > .red-ui-treeList-icon i.red-ui-icons,
+.folders-native-has-color .folders-native-custom-icon i.red-ui-icons,
+.folders-native-has-color .folders-native-folder-icon i.red-ui-icons {
+  background-color: var(--folders-item-color) !important;
 }
 
-
-.folders-delete-confirm-icon {
-    color:#c20;
-    margin-right:5px
+.folders-native-icon-hidden {
+  display: none !important;
 }
 
-
-.ui-dialog .folders-delete-button {
-    color:#fff!important;
-    background:#b00020!important;
-    border-color:#8f0019!important
+.folders-native-custom-icon {
+  display: inline-flex !important;
+  align-items: center;
+  justify-content: center;
+  width: 20px !important;
+  min-width: 20px;
 }
 
-
-.ui-dialog .folders-delete-button:hover {
-    background:#c5162f!important;
-    border-color:#9d001d!important
+/* User-selected flow icons sit slightly lower than Node-RED's native glyph. */
+.folders-native-custom-flow-icon {
+  position: relative;
+  top: 1px;
 }
 
-
-.folders-explorer-tab-icon {
-    font-size:13px!important;
-    line-height:15px!important;
-    width:15px!important;
-    height:15px!important;
-    text-align:center
+.folders-native-drop-target {
+  background: var(--red-ui-list-item-background-selected, #d8eaff) !important;
+  outline: 1px dashed var(--red-ui-primary-border-color, #888);
+  outline-offset: -2px;
 }
 
-
-.folders-explorer-tab-icon.fa,.red-ui-sidebar-banner-icon .folders-explorer-tab-icon.fa,button[data-tab-id="folders-sidebar"] .folders-explorer-tab-icon.fa {
-    font-family:FontAwesome!important;
-    mask-image:none!important;
-    -webkit-mask-image:none!important;
-    background:transparent!important;
-    background-color:transparent!important;
-    display:inline-block!important
+.folders-native-menu-danger,
+.ui-dialog .folders-native-dialog-danger {
+  color: #b00020 !important;
 }
 
-
-button[data-tab-id="folders-sidebar"].selected .folders-explorer-tab-icon.fa,button[data-tab-id="folders-sidebar"].active .folders-explorer-tab-icon.fa,button[data-tab-id="folders-sidebar"].red-ui-sidebar-tab-selected .folders-explorer-tab-icon.fa,.red-ui-sidebar-tabs button.selected[data-tab-id="folders-sidebar"] .folders-explorer-tab-icon.fa {
-    color:#fff!important
+.folders-native-menu {
+  position: absolute;
+  z-index: 4000;
+  display: flex;
+  flex-direction: column;
+  min-width: 180px;
+  padding: 4px 0;
+  overflow: hidden;
+  color: var(--red-ui-primary-text-color, #333);
+  background: var(--red-ui-primary-background, #fff);
+  border: 1px solid var(--red-ui-secondary-border-color, #ccc);
+  border-radius: 3px;
+  box-shadow: 0 3px 12px rgb(0 0 0 / 22%);
+  font-size: 12px;
 }
 
-
-.red-ui-sidebar-banner-icon .folders-explorer-tab-icon.fa {
-    font-size:13px!important;
-    line-height:15px!important;
-    width:15px!important;
-    height:15px!important
+.folders-native-menu button {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  width: 100%;
+  min-height: 28px;
+  padding: 4px 10px;
+  color: inherit;
+  text-align: left;
+  background: transparent;
+  border: 0;
+  cursor: pointer;
 }
 
-
-.folders-sidebar-banner-icon,.folders-sidebar-banner-icon .folders-explorer-tab-icon {
-    background:transparent!important;
-    background-color:transparent!important
+.folders-native-menu button:hover,
+.folders-native-menu button:focus {
+  background: var(--red-ui-list-item-background-hover, rgb(0 0 0 / 6%));
+  outline: 0;
 }
 
-
-
-.folders-dialog {
-    font-size:13px
+.folders-native-menu button > i {
+  flex: 0 0 15px;
+  width: 15px;
+  text-align: center;
 }
 
-
-.folders-form-row {
-    margin-bottom:12px
+.folders-native-menu-separator {
+  height: 1px;
+  margin: 4px 0;
+  background: var(--red-ui-secondary-border-color, #ddd);
 }
 
-
-.folders-form-row label {
-    display:block;
-    margin-bottom:4px;
-    font-weight:600;
-    color:var(--red-ui-primary-text-color,#333)
+.folders-native-dialog {
+  color: var(--red-ui-primary-text-color, #333);
+  font-size: 13px;
 }
 
-
-.folders-form-row input[type=text],.folders-form-row textarea,.folders-form-row select {
-    width:100%;
-    box-sizing:border-box
+.folders-native-form-row {
+  margin-bottom: 13px;
 }
 
-
-.folders-form-row input[type=text],.folders-form-row select {
-    height:30px
+.folders-native-form-row label {
+  display: block;
+  margin-bottom: 5px;
+  font-weight: 600;
 }
 
-
-.folders-form-row textarea {
-    min-height:135px;
-    resize:vertical;
-    font-family:inherit
+.folders-native-form-row input,
+.folders-native-form-row select {
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
 }
 
-
-.folders-small-help {
-    margin-top:4px;
-    color:var(--red-ui-secondary-text-color,#777);
-    font-size:12px
+.folders-native-help {
+  margin-top: 5px;
+  color: var(--red-ui-secondary-text-color, #666);
+  font-size: 11px;
+  line-height: 1.4;
 }
 
-
-.folders-confirm-list {
-    margin:8px 0 0 0;
-    padding-left:18px
+.folders-explorer
+  .red-ui-treeList-label.folders-disabled
+  .folders-native-folder-name {
+  color: #888;
+  font-style: italic;
 }
 
+.folders-explorer
+  .red-ui-treeList-label.folders-disabled
+  .folders-native-folder-icon {
+  opacity: 0.75;
+}
+
+.folders-native-presets {
+  display: flex;
+  gap: 7px;
+  margin-top: -3px;
+}
+
+.folders-native-color-preset {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  border: 1px solid var(--red-ui-secondary-border-color, #aaa);
+  border-radius: 3px;
+  cursor: pointer;
+}
+
+.folders-native-color-clear {
+  color: var(--red-ui-secondary-text-color, #777);
+  background-image: linear-gradient(
+    135deg,
+    transparent 46%,
+    #c33 47%,
+    #c33 53%,
+    transparent 54%
+  );
+}
+
+.folders-style-row + .folders-style-row {
+  margin-top: 18px;
+}
 
 .folders-style-grid {
-    display:grid;
-    grid-template-columns:repeat(6,32px);
-    gap:8px;
-    margin:8px 0 10px 0;
-    align-items:center;
-    justify-content:start
+  display: grid;
+  grid-template-columns: repeat(6, 32px);
+  gap: 8px;
+  align-items: center;
+  justify-content: start;
+  margin: 8px 0 10px;
 }
 
-
-.folders-color-choice {
-    width:32px;
-    height:32px;
-    border:1px solid var(--red-ui-secondary-border-color,#ccc);
-    border-radius:3px;
-    cursor:pointer;
-    box-sizing:border-box
-}
-
-
-.folders-color-choice.selected {
-    outline:2px solid var(--red-ui-primary-border-color,#777);
-    outline-offset:1px
-}
-
-
+.folders-color-choice,
 .folders-icon-choice {
-    width:32px;
-    height:32px;
-    line-height:30px;
-    text-align:center;
-    border:1px solid var(--red-ui-secondary-border-color,#ccc);
-    border-radius:3px;
-    background:#fff;
-    cursor:pointer;
-    box-sizing:border-box;
-    text-decoration:none;
-    color:var(--red-ui-primary-text-color,#333);
-    display:flex;
-    align-items:center;
-    justify-content:center
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 32px;
+  height: 32px;
+  box-sizing: border-box;
+  color: var(--red-ui-primary-text-color, #333);
+  background-color: var(--red-ui-form-input-background, #fff);
+  border: 1px solid var(--red-ui-secondary-border-color, #ccc);
+  border-radius: 3px;
+  cursor: pointer;
 }
 
-
+.folders-color-choice.selected,
 .folders-icon-choice.selected {
-    outline:2px solid var(--red-ui-primary-border-color,#777);
-    outline-offset:1px
+  outline: 2px solid var(--red-ui-primary-border-color, #777);
+  outline-offset: 1px;
 }
 
-
-.folders-dialog .folders-form-row input[type=text] {
-    margin-top:8px;
-    font-family:var(--red-ui-primary-font,"Helvetica Neue",Arial,Helvetica,sans-serif)!important
+.folders-style-row > input[type="text"] {
+  width: 100%;
+  height: 32px;
+  box-sizing: border-box;
 }
 
-
-.folders-dialog .folders-form-row + .folders-form-row {
-    margin-top:18px
+.folders-delete-list {
+  max-height: 220px;
+  margin: 8px 0 0;
+  padding-left: 22px;
+  overflow: auto;
 }
 
-
-.folders-dialog .folders-style-section-title {
-    display:flex;
-    align-items:center;
-    justify-content:space-between;
-    margin-bottom:4px
+.folders-delete-list li {
+  margin-bottom: 4px;
 }
 
+.folders-footer {
+  position: relative;
+  display: flex;
+  flex: 0 0 auto;
+  align-items: center;
+  justify-content: flex-start;
+  gap: 4px;
+  margin-top: auto;
+  padding: 4px;
+  border-top: 1px solid var(--red-ui-secondary-border-color, #ddd);
+  background: var(--red-ui-view-background, #fff);
+}
 
-.folders-dialog .folders-icon-help-link {
-    display:inline-flex;
-    align-items:center;
-    justify-content:center;
-    width:26px;
-    height:26px;
-    text-decoration:none
+.folders-footer-left,
+.folders-footer-right {
+  display: flex;
+  align-items: center;
+  gap: 4px;
+}
+
+.folders-footer-right {
+  margin-left: auto;
+}
+
+.folders-footer .red-ui-button {
+  height: 24px;
+  padding: 0 7px;
+  font-size: 12px;
+  line-height: 22px;
+}
+
+.folders-footer-plus {
+  margin-right: 2px;
+  font-size: 9px !important;
+}
+
+.folders-footer .folders-footer-flow-icon {
+  display: inline-block !important;
+  width: 11px !important;
+  height: 11px !important;
+  font-size: 9px !important;
+  line-height: 11px !important;
+  vertical-align: middle !important;
+}
+
+.folders-footer .fa-folder {
+  color: #777 !important;
+}
+
+.folders-danger i {
+  color: #c20;
+}
+
+@media (max-width: 330px) {
+  .folders-explorer .folders-header .folders-header-control span {
+    max-width: 38px;
+  }
 }
