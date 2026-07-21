@@ -39,6 +39,13 @@ Folder data is stored in the global environment variable named `folders`. Collap
 - Node-RED 5.0 or newer
 - Node.js 22.9 or newer
 
+## Contact
+
+Found a bug, have a suggestion, or want to discuss a plugin?
+
+- Start a topic on the [Node-RED Forum](https://discourse.nodered.org/) and tag me.
+- Join the [Discord community](https://discord.gg/cheJvPZN).
+
 ## License
 
 Licensed under the [MIT License](LICENSE).
